@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	pluginv1 "github.com/Wei-Shaw/sub2api/pkg/pluginapi/v1"
 	hclog "github.com/hashicorp/go-hclog"
 	hcplugin "github.com/hashicorp/go-plugin"
@@ -282,6 +283,7 @@ func (r *pluginRuntime) roundTrip(ctx context.Context, request *http.Request, pr
 		return nil, normalizePluginRPCError(ctx, "创建插件转发流", err, false)
 	}
 	requestID := strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + strconv.FormatInt(account.ID, 36)
+	profile := resolveCodexMacTLSProfile(account)
 	if err := stream.Send(&pluginv1.ForwardRequest{Frame: &pluginv1.ForwardRequest_Start{Start: &pluginv1.ForwardRequestStart{
 		RequestId:          requestID,
 		Method:             request.Method,
@@ -295,6 +297,7 @@ func (r *pluginRuntime) roundTrip(ctx context.Context, request *http.Request, pr
 		AccountType:        account.Type,
 		ContentLength:      request.ContentLength,
 		HasBody:            request.Body != nil && request.Body != http.NoBody,
+		TlsProfile:         tlsProfileForPlugin(profile),
 	}}}); err != nil {
 		cancel()
 		// gRPC Send 返回错误时无法证明服务端没有收到元数据，必须禁止自动重放。
@@ -352,6 +355,36 @@ func (r *pluginRuntime) roundTrip(ctx context.Context, request *http.Request, pr
 		ContentLength: start.ContentLength,
 		Request:       request,
 	}, nil
+}
+
+func tlsProfileForPlugin(profile *tlsfingerprint.Profile) *pluginv1.TLSProfile {
+	if profile == nil {
+		return nil
+	}
+	return &pluginv1.TLSProfile{
+		Name:                profile.Name,
+		CipherSuites:        uint16sToUint32s(profile.CipherSuites),
+		Curves:              uint16sToUint32s(profile.Curves),
+		PointFormats:        uint16sToUint32s(profile.PointFormats),
+		EnableGrease:        profile.EnableGREASE,
+		SignatureAlgorithms: uint16sToUint32s(profile.SignatureAlgorithms),
+		AlpnProtocols:       append([]string(nil), profile.ALPNProtocols...),
+		SupportedVersions:   uint16sToUint32s(profile.SupportedVersions),
+		KeyShareGroups:      uint16sToUint32s(profile.KeyShareGroups),
+		PskModes:            uint16sToUint32s(profile.PSKModes),
+		Extensions:          uint16sToUint32s(profile.Extensions),
+	}
+}
+
+func uint16sToUint32s(values []uint16) []uint32 {
+	if len(values) == 0 {
+		return nil
+	}
+	result := make([]uint32, len(values))
+	for index, value := range values {
+		result[index] = uint32(value)
+	}
+	return result
 }
 
 type PluginTransportError struct {

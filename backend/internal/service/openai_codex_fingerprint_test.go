@@ -100,6 +100,61 @@ func TestGetCodexFingerprintMode(t *testing.T) {
 	}
 }
 
+func TestPrepareCodexFingerprintExtraForCreate_DefaultsNewOpenAIAccounts(t *testing.T) {
+	tests := []struct {
+		name        string
+		platform    string
+		accountType string
+		extra       map[string]any
+		wantMode    codexFingerprintMode
+		wantHasSeed bool
+	}{
+		{
+			name:        "OAuth defaults to single machine",
+			platform:    PlatformOpenAI,
+			accountType: AccountTypeOAuth,
+			wantMode:    codexFingerprintSingleMachineMultiWindow,
+			wantHasSeed: true,
+		},
+		{
+			name:        "setup token defaults to single machine",
+			platform:    PlatformOpenAI,
+			accountType: AccountTypeSetupToken,
+			extra:       map[string]any{"custom": true},
+			wantMode:    codexFingerprintSingleMachineMultiWindow,
+			wantHasSeed: true,
+		},
+		{
+			name:        "explicit off remains off",
+			platform:    PlatformOpenAI,
+			accountType: AccountTypeOAuth,
+			extra:       map[string]any{codexFingerprintModeExtraKey: string(codexFingerprintOff)},
+			wantMode:    codexFingerprintOff,
+		},
+		{
+			name:        "API key is not a Codex account",
+			platform:    PlatformOpenAI,
+			accountType: AccountTypeAPIKey,
+			wantMode:    codexFingerprintOff,
+		},
+		{
+			name:        "Anthropic is not an OpenAI account",
+			platform:    PlatformAnthropic,
+			accountType: AccountTypeOAuth,
+			wantMode:    codexFingerprintOff,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prepared := prepareCodexFingerprintExtraForCreate(tt.platform, tt.accountType, tt.extra)
+			assert.Equal(t, tt.wantMode, codexFingerprintModeFromExtra(prepared))
+			_, hasSeed := codexFingerprintSeed(prepared)
+			assert.Equal(t, tt.wantHasSeed, hasSeed)
+		})
+	}
+}
+
 func TestResolveCodexMacTLSProfile(t *testing.T) {
 	tests := []struct {
 		name    string

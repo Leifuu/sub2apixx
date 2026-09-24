@@ -31,9 +31,11 @@ plugin/
 | `ValidateConfig` | 严格解析并返回完整规范化 JSON |
 | `ApplyConfig` | 原子应用配置；失败时保留旧配置 |
 | `TestConfig` | 验证当前环境和已保存配置，返回简短诊断 |
-| `Forward` | 双向流式传输请求与原始 HTTP 响应 |
+| `Forward` | 双向流式传输请求与原始 HTTP 响应；OpenAI OAuth 请求可能携带宿主选定的 `tls_profile` |
 
 请求帧顺序：`start`、零到多个 `body_chunk`、`body_end`。响应帧顺序：`start`、零到多个 `body_chunk`、`end`。不能继续处理的错误使用 `error` 帧。
+
+`ForwardRequestStart.tls_profile` 是可选字段，仅用于 OpenAI OAuth 出站请求。插件建立 TLS 连接时应使用其中的 ClientHello 参数；旧插件会忽略该字段，因此需要使用支持该字段的插件版本才能与宿主 Profile 一致。
 
 `request_sent` 必须如实表示请求是否可能已经到达上游。值为 `true` 时宿主禁止自动切换账号重放；只有能确认尚未调用上游 Transport 时才能返回 `false`。
 

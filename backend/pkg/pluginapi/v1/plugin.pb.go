@@ -606,6 +606,7 @@ type ForwardRequestStart struct {
 	AccountType        string                   `protobuf:"bytes,10,opt,name=account_type,json=accountType,proto3" json:"account_type,omitempty"`
 	ContentLength      int64                    `protobuf:"varint,11,opt,name=content_length,json=contentLength,proto3" json:"content_length,omitempty"`
 	HasBody            bool                     `protobuf:"varint,12,opt,name=has_body,json=hasBody,proto3" json:"has_body,omitempty"`
+	TlsProfile         *TLSProfile              `protobuf:"bytes,13,opt,name=tls_profile,json=tlsProfile,proto3" json:"tls_profile,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -722,6 +723,13 @@ func (x *ForwardRequestStart) GetHasBody() bool {
 		return x.HasBody
 	}
 	return false
+}
+
+func (x *ForwardRequestStart) GetTlsProfile() *TLSProfile {
+	if x != nil {
+		return x.TlsProfile
+	}
+	return nil
 }
 
 type ForwardRequest struct {
@@ -2026,6 +2034,133 @@ func (x *ResolveOutboundIdentityResponse) GetHeaders() map[string]*HeaderValues 
 	return nil
 }
 
+// TLSProfile is the host-selected TLS ClientHello profile for an outbound
+// request. It is only populated for provider-specific routes that explicitly
+// require it, currently OpenAI OAuth.
+type TLSProfile struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Name                string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	CipherSuites        []uint32               `protobuf:"varint,2,rep,packed,name=cipher_suites,json=cipherSuites,proto3" json:"cipher_suites,omitempty"`
+	Curves              []uint32               `protobuf:"varint,3,rep,packed,name=curves,proto3" json:"curves,omitempty"`
+	PointFormats        []uint32               `protobuf:"varint,4,rep,packed,name=point_formats,json=pointFormats,proto3" json:"point_formats,omitempty"`
+	EnableGrease        bool                   `protobuf:"varint,5,opt,name=enable_grease,json=enableGrease,proto3" json:"enable_grease,omitempty"`
+	SignatureAlgorithms []uint32               `protobuf:"varint,6,rep,packed,name=signature_algorithms,json=signatureAlgorithms,proto3" json:"signature_algorithms,omitempty"`
+	AlpnProtocols       []string               `protobuf:"bytes,7,rep,name=alpn_protocols,json=alpnProtocols,proto3" json:"alpn_protocols,omitempty"`
+	SupportedVersions   []uint32               `protobuf:"varint,8,rep,packed,name=supported_versions,json=supportedVersions,proto3" json:"supported_versions,omitempty"`
+	KeyShareGroups      []uint32               `protobuf:"varint,9,rep,packed,name=key_share_groups,json=keyShareGroups,proto3" json:"key_share_groups,omitempty"`
+	PskModes            []uint32               `protobuf:"varint,10,rep,packed,name=psk_modes,json=pskModes,proto3" json:"psk_modes,omitempty"`
+	Extensions          []uint32               `protobuf:"varint,11,rep,packed,name=extensions,proto3" json:"extensions,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *TLSProfile) Reset() {
+	*x = TLSProfile{}
+	mi := &file_plugin_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TLSProfile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TLSProfile) ProtoMessage() {}
+
+func (x *TLSProfile) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TLSProfile.ProtoReflect.Descriptor instead.
+func (*TLSProfile) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *TLSProfile) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TLSProfile) GetCipherSuites() []uint32 {
+	if x != nil {
+		return x.CipherSuites
+	}
+	return nil
+}
+
+func (x *TLSProfile) GetCurves() []uint32 {
+	if x != nil {
+		return x.Curves
+	}
+	return nil
+}
+
+func (x *TLSProfile) GetPointFormats() []uint32 {
+	if x != nil {
+		return x.PointFormats
+	}
+	return nil
+}
+
+func (x *TLSProfile) GetEnableGrease() bool {
+	if x != nil {
+		return x.EnableGrease
+	}
+	return false
+}
+
+func (x *TLSProfile) GetSignatureAlgorithms() []uint32 {
+	if x != nil {
+		return x.SignatureAlgorithms
+	}
+	return nil
+}
+
+func (x *TLSProfile) GetAlpnProtocols() []string {
+	if x != nil {
+		return x.AlpnProtocols
+	}
+	return nil
+}
+
+func (x *TLSProfile) GetSupportedVersions() []uint32 {
+	if x != nil {
+		return x.SupportedVersions
+	}
+	return nil
+}
+
+func (x *TLSProfile) GetKeyShareGroups() []uint32 {
+	if x != nil {
+		return x.KeyShareGroups
+	}
+	return nil
+}
+
+func (x *TLSProfile) GetPskModes() []uint32 {
+	if x != nil {
+		return x.PskModes
+	}
+	return nil
+}
+
+func (x *TLSProfile) GetExtensions() []uint32 {
+	if x != nil {
+		return x.Extensions
+	}
+	return nil
+}
+
 var File_plugin_proto protoreflect.FileDescriptor
 
 const file_plugin_proto_rawDesc = "" +
@@ -2068,7 +2203,7 @@ const file_plugin_proto_rawDesc = "" +
 	"\vstatus_json\x18\x04 \x01(\tR\n" +
 	"statusJson\"&\n" +
 	"\fHeaderValues\x12\x16\n" +
-	"\x06values\x18\x01 \x03(\tR\x06values\"\x8c\x04\n" +
+	"\x06values\x18\x01 \x03(\tR\x06values\"\xcc\x04\n" +
 	"\x13ForwardRequestStart\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x12\x16\n" +
@@ -2084,7 +2219,9 @@ const file_plugin_proto_rawDesc = "" +
 	"\faccount_type\x18\n" +
 	" \x01(\tR\vaccountType\x12%\n" +
 	"\x0econtent_length\x18\v \x01(\x03R\rcontentLength\x12\x19\n" +
-	"\bhas_body\x18\f \x01(\bR\ahasBody\x1a[\n" +
+	"\bhas_body\x18\f \x01(\bR\ahasBody\x12>\n" +
+	"\vtls_profile\x18\r \x01(\v2\x1d.sub2api.plugin.v1.TLSProfileR\n" +
+	"tlsProfile\x1a[\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
 	"\x05value\x18\x02 \x01(\v2\x1f.sub2api.plugin.v1.HeaderValuesR\x05value:\x028\x01\"\x97\x01\n" +
@@ -2181,7 +2318,23 @@ const file_plugin_proto_rawDesc = "" +
 	"\aheaders\x18\a \x03(\v2?.sub2api.plugin.v1.ResolveOutboundIdentityResponse.HeadersEntryR\aheaders\x1a[\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x125\n" +
-	"\x05value\x18\x02 \x01(\v2\x1f.sub2api.plugin.v1.HeaderValuesR\x05value:\x028\x012\x95\x05\n" +
+	"\x05value\x18\x02 \x01(\v2\x1f.sub2api.plugin.v1.HeaderValuesR\x05value:\x028\x01\"\x97\x03\n" +
+	"\n" +
+	"TLSProfile\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12#\n" +
+	"\rcipher_suites\x18\x02 \x03(\rR\fcipherSuites\x12\x16\n" +
+	"\x06curves\x18\x03 \x03(\rR\x06curves\x12#\n" +
+	"\rpoint_formats\x18\x04 \x03(\rR\fpointFormats\x12#\n" +
+	"\renable_grease\x18\x05 \x01(\bR\fenableGrease\x121\n" +
+	"\x14signature_algorithms\x18\x06 \x03(\rR\x13signatureAlgorithms\x12%\n" +
+	"\x0ealpn_protocols\x18\a \x03(\tR\ralpnProtocols\x12-\n" +
+	"\x12supported_versions\x18\b \x03(\rR\x11supportedVersions\x12(\n" +
+	"\x10key_share_groups\x18\t \x03(\rR\x0ekeyShareGroups\x12\x1b\n" +
+	"\tpsk_modes\x18\n" +
+	" \x03(\rR\bpskModes\x12\x1e\n" +
+	"\n" +
+	"extensions\x18\v \x03(\rR\n" +
+	"extensions2\x95\x05\n" +
 	"\x0fTransportPlugin\x12P\n" +
 	"\aGetInfo\x12!.sub2api.plugin.v1.GetInfoRequest\x1a\".sub2api.plugin.v1.GetInfoResponse\x12M\n" +
 	"\x06Health\x12 .sub2api.plugin.v1.HealthRequest\x1a!.sub2api.plugin.v1.HealthResponse\x12e\n" +
@@ -2211,7 +2364,7 @@ func file_plugin_proto_rawDescGZIP() []byte {
 	return file_plugin_proto_rawDescData
 }
 
-var file_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
 var file_plugin_proto_goTypes = []any{
 	(*GetInfoRequest)(nil),                  // 0: sub2api.plugin.v1.GetInfoRequest
 	(*GetInfoResponse)(nil),                 // 1: sub2api.plugin.v1.GetInfoResponse
@@ -2245,53 +2398,55 @@ var file_plugin_proto_goTypes = []any{
 	(*AccountInfo)(nil),                     // 29: sub2api.plugin.v1.AccountInfo
 	(*ResolveOutboundIdentityRequest)(nil),  // 30: sub2api.plugin.v1.ResolveOutboundIdentityRequest
 	(*ResolveOutboundIdentityResponse)(nil), // 31: sub2api.plugin.v1.ResolveOutboundIdentityResponse
-	nil,                                     // 32: sub2api.plugin.v1.ForwardRequestStart.HeadersEntry
-	nil,                                     // 33: sub2api.plugin.v1.ForwardResponseStart.HeadersEntry
-	nil,                                     // 34: sub2api.plugin.v1.ResolveOutboundIdentityResponse.HeadersEntry
+	(*TLSProfile)(nil),                      // 32: sub2api.plugin.v1.TLSProfile
+	nil,                                     // 33: sub2api.plugin.v1.ForwardRequestStart.HeadersEntry
+	nil,                                     // 34: sub2api.plugin.v1.ForwardResponseStart.HeadersEntry
+	nil,                                     // 35: sub2api.plugin.v1.ResolveOutboundIdentityResponse.HeadersEntry
 }
 var file_plugin_proto_depIdxs = []int32{
-	32, // 0: sub2api.plugin.v1.ForwardRequestStart.headers:type_name -> sub2api.plugin.v1.ForwardRequestStart.HeadersEntry
-	11, // 1: sub2api.plugin.v1.ForwardRequest.start:type_name -> sub2api.plugin.v1.ForwardRequestStart
-	33, // 2: sub2api.plugin.v1.ForwardResponseStart.headers:type_name -> sub2api.plugin.v1.ForwardResponseStart.HeadersEntry
-	13, // 3: sub2api.plugin.v1.ForwardResponse.start:type_name -> sub2api.plugin.v1.ForwardResponseStart
-	14, // 4: sub2api.plugin.v1.ForwardResponse.end:type_name -> sub2api.plugin.v1.ForwardResponseEnd
-	15, // 5: sub2api.plugin.v1.ForwardResponse.error:type_name -> sub2api.plugin.v1.ForwardResponseError
-	29, // 6: sub2api.plugin.v1.ListAccountsResponse.accounts:type_name -> sub2api.plugin.v1.AccountInfo
-	34, // 7: sub2api.plugin.v1.ResolveOutboundIdentityResponse.headers:type_name -> sub2api.plugin.v1.ResolveOutboundIdentityResponse.HeadersEntry
-	10, // 8: sub2api.plugin.v1.ForwardRequestStart.HeadersEntry.value:type_name -> sub2api.plugin.v1.HeaderValues
-	10, // 9: sub2api.plugin.v1.ForwardResponseStart.HeadersEntry.value:type_name -> sub2api.plugin.v1.HeaderValues
-	10, // 10: sub2api.plugin.v1.ResolveOutboundIdentityResponse.HeadersEntry.value:type_name -> sub2api.plugin.v1.HeaderValues
-	0,  // 11: sub2api.plugin.v1.TransportPlugin.GetInfo:input_type -> sub2api.plugin.v1.GetInfoRequest
-	2,  // 12: sub2api.plugin.v1.TransportPlugin.Health:input_type -> sub2api.plugin.v1.HealthRequest
-	4,  // 13: sub2api.plugin.v1.TransportPlugin.ValidateConfig:input_type -> sub2api.plugin.v1.ValidateConfigRequest
-	6,  // 14: sub2api.plugin.v1.TransportPlugin.ApplyConfig:input_type -> sub2api.plugin.v1.ApplyConfigRequest
-	8,  // 15: sub2api.plugin.v1.TransportPlugin.TestConfig:input_type -> sub2api.plugin.v1.TestConfigRequest
-	12, // 16: sub2api.plugin.v1.TransportPlugin.Forward:input_type -> sub2api.plugin.v1.ForwardRequest
-	17, // 17: sub2api.plugin.v1.TransportPlugin.InitHostServices:input_type -> sub2api.plugin.v1.InitHostServicesRequest
-	19, // 18: sub2api.plugin.v1.HostService.KVGet:input_type -> sub2api.plugin.v1.KVGetRequest
-	21, // 19: sub2api.plugin.v1.HostService.KVSet:input_type -> sub2api.plugin.v1.KVSetRequest
-	23, // 20: sub2api.plugin.v1.HostService.KVDelete:input_type -> sub2api.plugin.v1.KVDeleteRequest
-	25, // 21: sub2api.plugin.v1.HostService.KVList:input_type -> sub2api.plugin.v1.KVListRequest
-	27, // 22: sub2api.plugin.v1.HostService.ListAccounts:input_type -> sub2api.plugin.v1.ListAccountsRequest
-	30, // 23: sub2api.plugin.v1.HostService.ResolveOutboundIdentity:input_type -> sub2api.plugin.v1.ResolveOutboundIdentityRequest
-	1,  // 24: sub2api.plugin.v1.TransportPlugin.GetInfo:output_type -> sub2api.plugin.v1.GetInfoResponse
-	3,  // 25: sub2api.plugin.v1.TransportPlugin.Health:output_type -> sub2api.plugin.v1.HealthResponse
-	5,  // 26: sub2api.plugin.v1.TransportPlugin.ValidateConfig:output_type -> sub2api.plugin.v1.ValidateConfigResponse
-	7,  // 27: sub2api.plugin.v1.TransportPlugin.ApplyConfig:output_type -> sub2api.plugin.v1.ApplyConfigResponse
-	9,  // 28: sub2api.plugin.v1.TransportPlugin.TestConfig:output_type -> sub2api.plugin.v1.TestConfigResponse
-	16, // 29: sub2api.plugin.v1.TransportPlugin.Forward:output_type -> sub2api.plugin.v1.ForwardResponse
-	18, // 30: sub2api.plugin.v1.TransportPlugin.InitHostServices:output_type -> sub2api.plugin.v1.InitHostServicesResponse
-	20, // 31: sub2api.plugin.v1.HostService.KVGet:output_type -> sub2api.plugin.v1.KVGetResponse
-	22, // 32: sub2api.plugin.v1.HostService.KVSet:output_type -> sub2api.plugin.v1.KVSetResponse
-	24, // 33: sub2api.plugin.v1.HostService.KVDelete:output_type -> sub2api.plugin.v1.KVDeleteResponse
-	26, // 34: sub2api.plugin.v1.HostService.KVList:output_type -> sub2api.plugin.v1.KVListResponse
-	28, // 35: sub2api.plugin.v1.HostService.ListAccounts:output_type -> sub2api.plugin.v1.ListAccountsResponse
-	31, // 36: sub2api.plugin.v1.HostService.ResolveOutboundIdentity:output_type -> sub2api.plugin.v1.ResolveOutboundIdentityResponse
-	24, // [24:37] is the sub-list for method output_type
-	11, // [11:24] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	33, // 0: sub2api.plugin.v1.ForwardRequestStart.headers:type_name -> sub2api.plugin.v1.ForwardRequestStart.HeadersEntry
+	32, // 1: sub2api.plugin.v1.ForwardRequestStart.tls_profile:type_name -> sub2api.plugin.v1.TLSProfile
+	11, // 2: sub2api.plugin.v1.ForwardRequest.start:type_name -> sub2api.plugin.v1.ForwardRequestStart
+	34, // 3: sub2api.plugin.v1.ForwardResponseStart.headers:type_name -> sub2api.plugin.v1.ForwardResponseStart.HeadersEntry
+	13, // 4: sub2api.plugin.v1.ForwardResponse.start:type_name -> sub2api.plugin.v1.ForwardResponseStart
+	14, // 5: sub2api.plugin.v1.ForwardResponse.end:type_name -> sub2api.plugin.v1.ForwardResponseEnd
+	15, // 6: sub2api.plugin.v1.ForwardResponse.error:type_name -> sub2api.plugin.v1.ForwardResponseError
+	29, // 7: sub2api.plugin.v1.ListAccountsResponse.accounts:type_name -> sub2api.plugin.v1.AccountInfo
+	35, // 8: sub2api.plugin.v1.ResolveOutboundIdentityResponse.headers:type_name -> sub2api.plugin.v1.ResolveOutboundIdentityResponse.HeadersEntry
+	10, // 9: sub2api.plugin.v1.ForwardRequestStart.HeadersEntry.value:type_name -> sub2api.plugin.v1.HeaderValues
+	10, // 10: sub2api.plugin.v1.ForwardResponseStart.HeadersEntry.value:type_name -> sub2api.plugin.v1.HeaderValues
+	10, // 11: sub2api.plugin.v1.ResolveOutboundIdentityResponse.HeadersEntry.value:type_name -> sub2api.plugin.v1.HeaderValues
+	0,  // 12: sub2api.plugin.v1.TransportPlugin.GetInfo:input_type -> sub2api.plugin.v1.GetInfoRequest
+	2,  // 13: sub2api.plugin.v1.TransportPlugin.Health:input_type -> sub2api.plugin.v1.HealthRequest
+	4,  // 14: sub2api.plugin.v1.TransportPlugin.ValidateConfig:input_type -> sub2api.plugin.v1.ValidateConfigRequest
+	6,  // 15: sub2api.plugin.v1.TransportPlugin.ApplyConfig:input_type -> sub2api.plugin.v1.ApplyConfigRequest
+	8,  // 16: sub2api.plugin.v1.TransportPlugin.TestConfig:input_type -> sub2api.plugin.v1.TestConfigRequest
+	12, // 17: sub2api.plugin.v1.TransportPlugin.Forward:input_type -> sub2api.plugin.v1.ForwardRequest
+	17, // 18: sub2api.plugin.v1.TransportPlugin.InitHostServices:input_type -> sub2api.plugin.v1.InitHostServicesRequest
+	19, // 19: sub2api.plugin.v1.HostService.KVGet:input_type -> sub2api.plugin.v1.KVGetRequest
+	21, // 20: sub2api.plugin.v1.HostService.KVSet:input_type -> sub2api.plugin.v1.KVSetRequest
+	23, // 21: sub2api.plugin.v1.HostService.KVDelete:input_type -> sub2api.plugin.v1.KVDeleteRequest
+	25, // 22: sub2api.plugin.v1.HostService.KVList:input_type -> sub2api.plugin.v1.KVListRequest
+	27, // 23: sub2api.plugin.v1.HostService.ListAccounts:input_type -> sub2api.plugin.v1.ListAccountsRequest
+	30, // 24: sub2api.plugin.v1.HostService.ResolveOutboundIdentity:input_type -> sub2api.plugin.v1.ResolveOutboundIdentityRequest
+	1,  // 25: sub2api.plugin.v1.TransportPlugin.GetInfo:output_type -> sub2api.plugin.v1.GetInfoResponse
+	3,  // 26: sub2api.plugin.v1.TransportPlugin.Health:output_type -> sub2api.plugin.v1.HealthResponse
+	5,  // 27: sub2api.plugin.v1.TransportPlugin.ValidateConfig:output_type -> sub2api.plugin.v1.ValidateConfigResponse
+	7,  // 28: sub2api.plugin.v1.TransportPlugin.ApplyConfig:output_type -> sub2api.plugin.v1.ApplyConfigResponse
+	9,  // 29: sub2api.plugin.v1.TransportPlugin.TestConfig:output_type -> sub2api.plugin.v1.TestConfigResponse
+	16, // 30: sub2api.plugin.v1.TransportPlugin.Forward:output_type -> sub2api.plugin.v1.ForwardResponse
+	18, // 31: sub2api.plugin.v1.TransportPlugin.InitHostServices:output_type -> sub2api.plugin.v1.InitHostServicesResponse
+	20, // 32: sub2api.plugin.v1.HostService.KVGet:output_type -> sub2api.plugin.v1.KVGetResponse
+	22, // 33: sub2api.plugin.v1.HostService.KVSet:output_type -> sub2api.plugin.v1.KVSetResponse
+	24, // 34: sub2api.plugin.v1.HostService.KVDelete:output_type -> sub2api.plugin.v1.KVDeleteResponse
+	26, // 35: sub2api.plugin.v1.HostService.KVList:output_type -> sub2api.plugin.v1.KVListResponse
+	28, // 36: sub2api.plugin.v1.HostService.ListAccounts:output_type -> sub2api.plugin.v1.ListAccountsResponse
+	31, // 37: sub2api.plugin.v1.HostService.ResolveOutboundIdentity:output_type -> sub2api.plugin.v1.ResolveOutboundIdentityResponse
+	25, // [25:38] is the sub-list for method output_type
+	12, // [12:25] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_plugin_proto_init() }
@@ -2316,7 +2471,7 @@ func file_plugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_proto_rawDesc), len(file_plugin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   35,
+			NumMessages:   36,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

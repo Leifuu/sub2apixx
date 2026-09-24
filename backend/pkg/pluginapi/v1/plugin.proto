@@ -110,6 +110,7 @@ message ForwardRequestStart {
   string account_type = 10;
   int64 content_length = 11;
   bool has_body = 12;
+  TLSProfile tls_profile = 13;
 }
 
 message ForwardRequest {
@@ -271,4 +272,21 @@ message ResolveOutboundIdentityResponse {
   string proxy_url = 5;
   string token = 6;
   map<string, HeaderValues> headers = 7;
+}
+
+// TLSProfile is the host-selected TLS ClientHello profile for an outbound
+// request. It is only populated for provider-specific routes that explicitly
+// require it, currently OpenAI OAuth.
+message TLSProfile {
+  string name = 1;
+  repeated uint32 cipher_suites = 2;
+  repeated uint32 curves = 3;
+  repeated uint32 point_formats = 4;
+  bool enable_grease = 5;
+  repeated uint32 signature_algorithms = 6;
+  repeated string alpn_protocols = 7;
+  repeated uint32 supported_versions = 8;
+  repeated uint32 key_share_groups = 9;
+  repeated uint32 psk_modes = 10;
+  repeated uint32 extensions = 11;
 }

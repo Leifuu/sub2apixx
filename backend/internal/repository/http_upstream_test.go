@@ -2,6 +2,7 @@ package repository
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -94,6 +95,51 @@ func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredSOCKSProxy(t *testing.T) {
 	require.NoError(t, resp.Body.Close())
 	require.Equal(t, int64(1), proxyCalls.Load())
 	require.Equal(t, int64(1), upstreamCalls.Load())
+}
+
+func TestHTTPUpstreamDoWithTLSRetriesOpenAITLSHandshakeEOFOnce(t *testing.T) {
+	upstream, ok := NewHTTPUpstream(nil).(*httpUpstreamService)
+	require.True(t, ok)
+
+	const accountID int64 = 8041
+	profile := &tlsfingerprint.Profile{Name: "test"}
+	entry, err := upstream.getClientEntryWithTLS("", accountID, 1, profile, service.HTTPUpstreamProfileOpenAI, false, false)
+	require.NoError(t, err)
+	var calls atomic.Int64
+	var bodies []string
+	entry.client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		body, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
+		bodies = append(bodies, string(body))
+		if calls.Load() == 1 {
+			return nil, fmt.Errorf("Post %s: TLS handshake failed: %w", req.URL, io.EOF)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), Request: req}, nil
+	})}
+
+	ctx := service.WithHTTPUpstreamProfile(context.Background(), service.HTTPUpstreamProfileOpenAI)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/responses", strings.NewReader(`{"input":"hello"}`))
+	require.NoError(t, err)
+	resp, err := upstream.DoWithTLS(req, "", accountID, 1, profile)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), calls.Load())
+	require.Equal(t, []string{`{"input":"hello"}`, `{"input":"hello"}`}, bodies)
+	require.NoError(t, resp.Body.Close())
+}
+
+func TestOpenAITLSHandshakeRetryOnlyMatchesOpenAIEOF(t *testing.T) {
+	openAIContext := service.WithHTTPUpstreamProfile(context.Background(), service.HTTPUpstreamProfileOpenAI)
+	otherContext := service.WithHTTPUpstreamProfile(context.Background(), service.HTTPUpstreamProfileGrok)
+	req, err := http.NewRequestWithContext(openAIContext, http.MethodPost, "https://api.openai.com/v1/responses", strings.NewReader("body"))
+	require.NoError(t, err)
+
+	require.True(t, isOpenAITLSHandshakeEOF(req, fmt.Errorf("TLS handshake failed: %w", io.EOF)))
+	require.False(t, isOpenAITLSHandshakeEOF(req, errors.New("TLS handshake failed: connection reset by peer")))
+	require.False(t, isOpenAITLSHandshakeEOF(req, io.EOF))
+
+	req = req.WithContext(otherContext)
+	require.False(t, isOpenAITLSHandshakeEOF(req, fmt.Errorf("TLS handshake failed: %w", io.EOF)))
 }
 
 func TestTLSFingerprintHTTPSProxyUsesLayeredTLSWithoutBypassingProxy(t *testing.T) {

@@ -223,7 +223,16 @@ func codexFingerprintSeed(extra map[string]any) (string, bool) {
 
 func prepareCodexFingerprintExtraForCreate(platform, accountType string, extra map[string]any) map[string]any {
 	prepared := stripCodexFingerprintSeed(extra)
-	if platform != PlatformOpenAI || (accountType != AccountTypeOAuth && accountType != AccountTypeSetupToken) || !codexFingerprintModeRequiresSeed(codexFingerprintModeFromExtra(prepared)) {
+	if platform != PlatformOpenAI || (accountType != AccountTypeOAuth && accountType != AccountTypeSetupToken) {
+		return prepared
+	}
+	if _, configured := prepared[codexFingerprintModeExtraKey]; !configured {
+		if prepared == nil {
+			prepared = make(map[string]any, 2)
+		}
+		prepared[codexFingerprintModeExtraKey] = string(codexFingerprintSingleMachineMultiWindow)
+	}
+	if !codexFingerprintModeRequiresSeed(codexFingerprintModeFromExtra(prepared)) {
 		return prepared
 	}
 	if prepared == nil {
@@ -280,8 +289,9 @@ func ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates map[string]any) boo
 
 // GetCodexFingerprintMode 从账号 extra JSON 读取指纹收敛模式。
 //
-// **收敛是显式 opt-in**：未设置、空值或非法值一律按 off 处理，只有管理员
-// 明确配置 device / session / full 才收敛。
+// 新建 OpenAI OAuth/setup-token 账号默认写入 single_machine_multi_window；
+// 存量账号或显式配置 off 的账号仍保持原有行为。读取缺省值仍按 off 处理，
+// 这样不会在升级时静默改写已有账号的客户端身份。
 //
 // 历史：v0.1.175（#5553）把缺省值当作 session，导致升级后存量 OAuth 账号
 // （普遍没有这个 extra 键）的每个非透传请求都被静默改写 installation /

@@ -254,9 +254,44 @@ func (s *httpUpstreamService) do(req *http.Request, proxyURL string, accountID i
 // profile 为 nil 时不启用 TLS 指纹，行为与 Do 方法相同。
 // profile 非 nil 时使用指定的 Profile 进行 TLS 指纹伪装。
 func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
-	return service.DoWithConfiguredUpstreamRetry(req, func(attempt *http.Request) (*http.Response, error) {
+	send := func(attempt *http.Request) (*http.Response, error) {
 		return s.doWithTLS(attempt, proxyURL, accountID, accountConcurrency, profile)
-	})
+	}
+	resp, err := service.DoWithConfiguredUpstreamRetry(req, send)
+	if !isOpenAITLSHandshakeEOF(req, err) {
+		return resp, err
+	}
+
+	retryReq, cloneErr := cloneRequestForTLSHandshakeRetry(req)
+	if cloneErr != nil {
+		return resp, err
+	}
+	slog.Debug("openai_tls_handshake_retry", "account_id", accountID)
+	return service.DoWithConfiguredUpstreamRetry(retryReq, send)
+}
+
+func isOpenAITLSHandshakeEOF(req *http.Request, err error) bool {
+	if req == nil || err == nil || req.GetBody == nil || req.Context().Err() != nil {
+		return false
+	}
+	upstreamProfile := service.HTTPUpstreamProfileFromContext(req.Context())
+	if upstreamProfile != service.HTTPUpstreamProfileOpenAI && upstreamProfile != service.HTTPUpstreamProfileOpenAIHarvest {
+		return false
+	}
+	return errors.Is(err, io.EOF) && strings.Contains(err.Error(), "TLS handshake failed:")
+}
+
+func cloneRequestForTLSHandshakeRetry(req *http.Request) (*http.Request, error) {
+	if req == nil || req.GetBody == nil {
+		return nil, errors.New("request body is not replayable")
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, err
+	}
+	retryReq := req.Clone(req.Context())
+	retryReq.Body = body
+	return retryReq, nil
 }
 
 func (s *httpUpstreamService) doWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
