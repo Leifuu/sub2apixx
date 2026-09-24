@@ -30,7 +30,7 @@ const (
 	openaiQuotaUpstreamTimeout  = 20 * time.Second
 	openaiQuotaCodexBeta        = "codex-1"
 	openaiQuotaCodexOriginator  = "Codex Desktop"
-	openaiQuotaCodexLanguageTag = "zh-CN"
+	openaiQuotaCodexLanguageTag = "zh-TW"
 	openaiQuotaSecFetchSite     = "none"
 	openaiQuotaSecFetchMode     = "no-cors"
 	openaiQuotaSecFetchDest     = "empty"

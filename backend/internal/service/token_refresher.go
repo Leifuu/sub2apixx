@@ -2,8 +2,16 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"strings"
 	"time"
+)
+
+const (
+	openAICLITokenRefreshWindow   = 5 * time.Minute
+	openAICLITokenRefreshInterval = 8 * 24 * time.Hour
+	openAILastRefreshAtExtraKey   = "openai_last_refresh_at"
 )
 
 // TokenRefresher 定义平台特定的token刷新策略接口
@@ -98,9 +106,17 @@ func (r *OpenAITokenRefresher) CanRefresh(account *Account) bool {
 	return account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth
 }
 
-// NeedsRefresh 检查token是否需要刷新
-// expires_at 缺失且处于限流状态时需要刷新，防止限流期间 token 静默过期
-func (r *OpenAITokenRefresher) NeedsRefresh(account *Account, refreshWindow time.Duration) bool {
+// NeedsRefresh follows the ChatGPT Codex CLI policy for OpenAI OAuth tokens.
+// The generic refresh window is intentionally ignored so other providers keep
+// their existing background refresh policy.
+func (r *OpenAITokenRefresher) NeedsRefresh(account *Account, _ time.Duration) bool {
+	return needsOpenAICLITokenRefresh(account, time.Now())
+}
+
+func needsOpenAICLITokenRefresh(account *Account, now time.Time) bool {
+	if account == nil {
+		return false
+	}
 	if account.IsOpenAIPersonalAccessToken() {
 		return false
 	}
@@ -108,11 +124,38 @@ func (r *OpenAITokenRefresher) NeedsRefresh(account *Account, refreshWindow time
 		return false
 	}
 	expiresAt := account.GetCredentialAsTime("expires_at")
-	if expiresAt == nil {
-		return account.IsRateLimited()
+	if expiresAt != nil {
+		return !expiresAt.After(now.Add(openAICLITokenRefreshWindow))
+	}
+	if account.IsRateLimited() {
+		return true
 	}
 
-	return time.Until(*expiresAt) < refreshWindow
+	lastRefreshRaw, ok := account.Extra[openAILastRefreshAtExtraKey]
+	if !ok {
+		return true
+	}
+	lastRefresh, err := time.Parse(time.RFC3339, strings.TrimSpace(fmt.Sprint(lastRefreshRaw)))
+	if err != nil {
+		return true
+	}
+	return lastRefresh.Before(now.Add(-openAICLITokenRefreshInterval))
+}
+
+func recordOpenAITokenRefresh(ctx context.Context, repo AccountRepository, account *Account) {
+	if repo == nil || account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth || account.IsOpenAIPersonalAccessToken() {
+		return
+	}
+
+	refreshedAt := time.Now().UTC().Format(time.RFC3339)
+	if err := repo.UpdateExtra(ctx, account.ID, map[string]any{openAILastRefreshAtExtraKey: refreshedAt}); err != nil {
+		slog.Warn("openai_token_refresh_timestamp_persist_failed", "account_id", account.ID, "error", err)
+		return
+	}
+	if account.Extra == nil {
+		account.Extra = make(map[string]any)
+	}
+	account.Extra[openAILastRefreshAtExtraKey] = refreshedAt
 }
 
 // Refresh 执行token刷新

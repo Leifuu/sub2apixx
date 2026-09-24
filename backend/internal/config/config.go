@@ -656,6 +656,8 @@ type TokenRefreshConfig struct {
 	AttemptTimeoutSeconds int `mapstructure:"attempt_timeout_seconds"`
 	// 单个后台刷新周期的总超时（秒）
 	CycleTimeoutSeconds int `mapstructure:"cycle_timeout_seconds"`
+	// OpenAI OAuth 刷新成功后是否自动关闭 ChatGPT 训练数据共享
+	OpenAIPrivacyAutoDisableTraining bool `mapstructure:"openai_privacy_auto_disable_training"`
 }
 
 type PricingConfig struct {
@@ -2607,6 +2609,7 @@ func setDefaults() {
 	viper.SetDefault("token_refresh.provider_failure_threshold", 3)
 	viper.SetDefault("token_refresh.attempt_timeout_seconds", 15)
 	viper.SetDefault("token_refresh.cycle_timeout_seconds", 240)
+	viper.SetDefault("token_refresh.openai_privacy_auto_disable_training", false)
 
 	// Gemini OAuth - configure via environment variables or config file
 	// GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET

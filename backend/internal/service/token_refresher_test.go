@@ -266,3 +266,84 @@ func TestOpenAITokenRefresher_CanRefresh(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAITokenRefresher_NeedsRefreshFollowsCodexCLIPolicy(t *testing.T) {
+	refresher := NewOpenAITokenRefresher(nil, nil)
+
+	tests := []struct {
+		name        string
+		credentials map[string]any
+		extra       map[string]any
+		rateLimited bool
+		wantRefresh bool
+	}{
+		{
+			name: "uses five minute window instead of generic window",
+			credentials: map[string]any{
+				"refresh_token": "refresh-token",
+				"expires_at":    time.Now().Add(4 * time.Minute).UTC().Format(time.RFC3339),
+			},
+			wantRefresh: true,
+		},
+		{
+			name: "does not refresh outside five minute window",
+			credentials: map[string]any{
+				"refresh_token": "refresh-token",
+				"expires_at":    time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339),
+			},
+			wantRefresh: false,
+		},
+		{
+			name: "refreshes missing expiration without prior refresh timestamp",
+			credentials: map[string]any{
+				"refresh_token": "refresh-token",
+			},
+			wantRefresh: true,
+		},
+		{
+			name: "missing expiration refreshes after eight days",
+			credentials: map[string]any{
+				"refresh_token": "refresh-token",
+			},
+			extra: map[string]any{
+				openAILastRefreshAtExtraKey: time.Now().Add(-(openAICLITokenRefreshInterval + time.Minute)).UTC().Format(time.RFC3339),
+			},
+			wantRefresh: true,
+		},
+		{
+			name: "missing expiration does not refresh before eight days",
+			credentials: map[string]any{
+				"refresh_token": "refresh-token",
+			},
+			extra: map[string]any{
+				openAILastRefreshAtExtraKey: time.Now().Add(-(openAICLITokenRefreshInterval - time.Minute)).UTC().Format(time.RFC3339),
+			},
+			wantRefresh: false,
+		},
+		{
+			name: "rate limited account refreshes without expiration",
+			credentials: map[string]any{
+				"refresh_token": "refresh-token",
+			},
+			rateLimited: true,
+			wantRefresh: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Credentials: tt.credentials,
+				Extra:       tt.extra,
+			}
+			if tt.rateLimited {
+				resetAt := time.Now().Add(time.Minute)
+				account.RateLimitResetAt = &resetAt
+			}
+
+			require.Equal(t, tt.wantRefresh, refresher.NeedsRefresh(account, time.Hour))
+		})
+	}
+}

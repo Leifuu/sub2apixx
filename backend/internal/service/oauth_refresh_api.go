@@ -359,6 +359,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			)
 			return nil, fmt.Errorf("%w: %v", errOAuthRefreshCredentialPersist, updateErr)
 		}
+		recordOpenAITokenRefresh(ctx, api.accountRepo, freshAccount)
 	}
 
 	if requestPath && freshAccount.Platform == PlatformGrok {

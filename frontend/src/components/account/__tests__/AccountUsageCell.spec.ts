@@ -354,7 +354,7 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('25')
   })
 
-  it('OpenAI OAuth 快照已过期时首屏会重新请求 usage', async () => {
+  it('OpenAI OAuth 快照已过期时手动刷新会请求 usage', async () => {
     getUsage.mockResolvedValue({
       five_hour: {
         utilization: 15,
@@ -408,6 +408,9 @@ describe('AccountUsageCell', () => {
       }
     })
 
+    await flushPromises()
+    expect(getUsage).not.toHaveBeenCalled()
+    await wrapper.setProps({ manualRefreshToken: 1 })
     await flushPromises()
 
     expect(getUsage).toHaveBeenCalledWith(2000)
@@ -470,6 +473,9 @@ describe('AccountUsageCell', () => {
     })
 
     await flushPromises()
+    expect(getUsage).not.toHaveBeenCalled()
+    await wrapper.setProps({ manualRefreshToken: 1 })
+    await flushPromises()
 
     expect(getUsage).toHaveBeenCalledWith(2001)
     // 单一数据源：始终使用 /usage API 返回值，忽略 codex 快照
@@ -508,6 +514,8 @@ describe('AccountUsageCell', () => {
       }
     })
 
+    await flushPromises()
+    await wrapper.setProps({ manualRefreshToken: 1 })
     await flushPromises()
 
     expect(wrapper.text()).toContain('5h|none')
@@ -549,6 +557,8 @@ describe('AccountUsageCell', () => {
       }
     })
 
+    await flushPromises()
+    await wrapper.setProps({ manualRefreshToken: 1 })
     await flushPromises()
 
     expect(wrapper.text()).toContain('7d|none')
@@ -612,14 +622,12 @@ describe('AccountUsageCell', () => {
     })
 
     await flushPromises()
-    // mount 时已经拉取一次
-    expect(getUsage).toHaveBeenCalledTimes(1)
+    expect(getUsage).not.toHaveBeenCalled()
 
     await wrapper.setProps({ manualRefreshToken: 1 })
     await flushPromises()
 
-    // 手动刷新再拉一次
-    expect(getUsage).toHaveBeenCalledTimes(2)
+    expect(getUsage).toHaveBeenCalledTimes(1)
     expect(getUsage).toHaveBeenCalledWith(2010)
     // 单一数据源：始终使用 /usage API 值
     expect(wrapper.text()).toContain('5h|18|900')
@@ -673,6 +681,9 @@ describe('AccountUsageCell', () => {
 	  }
 	})
 
+	await flushPromises()
+	expect(getUsage).not.toHaveBeenCalled()
+	await wrapper.setProps({ manualRefreshToken: 1 })
 	await flushPromises()
 
 	expect(getUsage).toHaveBeenCalledWith(2002)
@@ -735,8 +746,7 @@ describe('AccountUsageCell', () => {
 	})
 
 	await flushPromises()
-	expect(wrapper.text()).toContain('5h|0|100')
-	expect(getUsage).toHaveBeenCalledTimes(1)
+	expect(getUsage).not.toHaveBeenCalled()
 
 	await wrapper.setProps({
 	  account: {
@@ -749,8 +759,7 @@ describe('AccountUsageCell', () => {
 	})
 
 	await flushPromises()
-	expect(getUsage).toHaveBeenCalledTimes(2)
-	expect(wrapper.text()).toContain('5h|0|200')
+	expect(getUsage).not.toHaveBeenCalled()
   })
 
   it('OpenAI 重置响应更新账号行后重新拉取 usage', async () => {
@@ -785,7 +794,7 @@ describe('AccountUsageCell', () => {
     })
 
     await flushPromises()
-    expect(getUsage).toHaveBeenCalledTimes(1)
+    expect(getUsage).not.toHaveBeenCalled()
 
     await wrapper.get('[data-test="quota-reset-result"]').trigger('click')
     const updatedAccount = wrapper.emitted<Account[]>('account-updated')?.[0]?.[0]
@@ -794,7 +803,7 @@ describe('AccountUsageCell', () => {
     await wrapper.setProps({ account: updatedAccount as Account })
     await flushPromises()
 
-    expect(getUsage).toHaveBeenCalledTimes(2)
+    expect(getUsage).not.toHaveBeenCalled()
   })
 
   it('OpenAI OAuth 已限额时显示 /usage API 返回的限额数据', async () => {
@@ -849,6 +858,9 @@ describe('AccountUsageCell', () => {
 	  }
 	})
 
+	await flushPromises()
+	expect(getUsage).not.toHaveBeenCalled()
+	await wrapper.setProps({ manualRefreshToken: 1 })
 	await flushPromises()
 
   expect(getUsage).toHaveBeenCalledWith(2004)

@@ -53,8 +53,9 @@ func TestTokenRefreshService_ensureOpenAIPrivacy_RetriesNonSuccessModes(t *testi
 
 	cfg := &config.Config{
 		TokenRefresh: config.TokenRefreshConfig{
-			MaxRetries:          1,
-			RetryBackoffSeconds: 0,
+			MaxRetries:                       1,
+			RetryBackoffSeconds:              0,
+			OpenAIPrivacyAutoDisableTraining: true,
 		},
 	}
 
@@ -86,4 +87,38 @@ func TestTokenRefreshService_ensureOpenAIPrivacy_RetriesNonSuccessModes(t *testi
 			require.Equal(t, 1, privacyCalls)
 		})
 	}
+}
+
+func TestTokenRefreshService_ensureOpenAIPrivacy_DisabledByDefault(t *testing.T) {
+	t.Parallel()
+
+	service := NewTokenRefreshService(
+		&tokenRefreshAccountRepo{},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		&config.Config{},
+		nil,
+	)
+	privacyCalls := 0
+	service.SetPrivacyDeps(func(proxyURL string) (*req.Client, error) {
+		privacyCalls++
+		return nil, errors.New("privacy request must remain disabled")
+	}, nil)
+
+	account := &Account{
+		ID:       303,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token": "token-3",
+		},
+	}
+
+	service.ensureOpenAIPrivacy(context.Background(), account)
+
+	require.Zero(t, privacyCalls)
 }

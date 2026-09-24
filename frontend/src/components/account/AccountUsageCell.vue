@@ -841,6 +841,7 @@ const openAISevenDayEstimatedTotalCost = computed(() => {
 const openAIUsageRefreshKey = computed(() => buildOpenAIUsageRefreshKey(props.account))
 
 const shouldAutoLoadUsageOnMount = computed(() => {
+  if (props.account.platform === 'openai' && props.account.type === 'oauth') return false
   return shouldFetchUsage.value
 })
 
@@ -1454,7 +1455,7 @@ const loadUsage = async (options?: { source?: 'passive' | 'active'; bypassCache?
 }
 
 const flushPendingAutoLoad = () => {
-  if (!pendingAutoLoad.value) return
+  if (!pendingAutoLoad.value || !shouldAutoLoadUsageOnMount.value) return
   const source = pendingAutoLoadSource.value
   pendingAutoLoad.value = false
   pendingAutoLoadSource.value = undefined
@@ -1464,7 +1465,7 @@ const flushPendingAutoLoad = () => {
 }
 
 const requestAutoLoad = (source?: 'passive' | 'active') => {
-  if (!shouldFetchUsage.value) return
+  if (!shouldAutoLoadUsageOnMount.value) return
   if (shouldLazyLoadOnMobile.value && !hasEnteredViewport.value) {
     pendingAutoLoad.value = true
     pendingAutoLoadSource.value = source
@@ -1631,7 +1632,7 @@ onMounted(() => {
 
   if (isBatchManaged.value) {
     syncManagedUsageState()
-    requestParentBatchUsage()
+    if (shouldAutoLoadUsageOnMount.value) requestParentBatchUsage()
     return
   }
 
@@ -1651,7 +1652,7 @@ watch(
 watch(isBatchManaged, (managed, wasManaged) => {
   if (managed && !wasManaged) {
     syncManagedUsageState()
-    requestParentBatchUsage()
+    if (shouldAutoLoadUsageOnMount.value) requestParentBatchUsage()
   }
 })
 
@@ -1665,7 +1666,7 @@ watch(
     ) {
       return
     }
-    if (!managed || !shouldFetchUsage.value) return
+    if (!managed || !shouldAutoLoadUsageOnMount.value) return
     syncManagedUsageState()
     requestParentBatchUsage()
   },
@@ -1675,6 +1676,7 @@ watch(
 watch(openAIUsageRefreshKey, (nextKey, prevKey) => {
   if (!prevKey || nextKey === prevKey) return
   if (props.account.platform !== 'openai' || props.account.type !== 'oauth') return
+  if (!shouldAutoLoadUsageOnMount.value) return
 
   if (isBatchManaged.value) {
     requestParentBatchUsage({ force: true })

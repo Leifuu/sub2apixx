@@ -912,6 +912,7 @@ func (s *TokenRefreshService) refreshWithRetryWithRateGate(
 					err = fmt.Errorf("failed to save credentials: %w", saveErr)
 				} else {
 					credentialsPersisted = true
+					recordOpenAITokenRefresh(attemptCtx, s.accountRepo, account)
 				}
 			}
 		}
@@ -1443,6 +1444,9 @@ func isNonRetryableRefreshError(err error) bool {
 // 未设置则调用 disableOpenAITraining 并持久化结果到 Extra。
 func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *Account) {
 	if account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth {
+		return
+	}
+	if s.cfg == nil || !s.cfg.OpenAIPrivacyAutoDisableTraining {
 		return
 	}
 	if s.privacyClientFactory == nil {

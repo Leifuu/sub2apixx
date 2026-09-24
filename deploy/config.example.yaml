@@ -678,6 +678,9 @@ log:
 # Token refresh behavior
 # token 刷新行为控制
 token_refresh:
+  # Automatically disable ChatGPT training-data sharing after a successful OpenAI OAuth refresh.
+  # OpenAI OAuth 刷新成功后是否自动关闭 ChatGPT 训练数据共享（默认关闭）
+  openai_privacy_auto_disable_training: false
   # Candidate accounts loaded per cursor page (maximum 1000)
   # 每个游标分页加载的候选账号数量（最大 1000）
   candidate_page_size: 200
