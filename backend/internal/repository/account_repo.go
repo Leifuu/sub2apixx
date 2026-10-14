@@ -57,10 +57,6 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_5h_",
 	"codex_7d_",
 	"codex_reset_credit_",
-	// 292 门票是纯运行态凭据：它不在 filterSchedulerExtra 的投影白名单里，
-	// 因此 bucket 重建事件永远搬不动门票状态，续期时开事务+发 outbox 是白干。
-	// 归为观测型后仍会同步单账号快照（见 UpdateExtra），不丢任何新鲜度。
-	"codex_turn_ticket:",
 	"passive_usage_",
 	"upstream_billing_probe",
 	"upstream_billing_rate_sync",
@@ -69,7 +65,6 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_usage_updated_at":     {},
-	"codex_turn_cookies":         {},
 	"codex_credits_snapshot":     {},
 	"codex_referral_snapshot":    {},
 	"grok_billing_snapshot":      {},
@@ -157,7 +152,7 @@ func createAccountRecord(ctx context.Context, client *dbent.Client, account *ser
 		SetPlatform(account.Platform).
 		SetType(account.Type).
 		SetCredentials(normalizeJSONMap(account.Credentials)).
-		SetExtra(normalizeJSONMap(account.Extra)).
+		SetExtra(service.StripRetiredAccountExtra(normalizeJSONMap(account.Extra))).
 		SetConcurrency(account.Concurrency).
 		SetPriority(account.Priority).
 		SetStatus(account.Status).
@@ -775,18 +770,16 @@ func lockAndMergeAccountProbeExtra(
 
 	// extra 理论上恒为 JSON 对象，但历史数据若存成非对象（数组/标量），在此硬失败
 	// 会让该账号的任何编辑都保存不了——而这条路径覆盖所有平台的账号更新。
-	// 门票和路由 Cookie 是短寿命临时凭据，下个打票周期会自动补回，因此解析失败时降级为
-	// 「无门票可保留」继续完成编辑，不要把整个账号更新拖垮。
 	var currentExtra map[string]any
 	if len(currentExtraJSON) > 0 {
 		if err := json.Unmarshal(currentExtraJSON, &currentExtra); err != nil {
 			logger.LegacyPrintf("repository.account",
-				"[Account] current extra unmarshal failed, codex ticket preservation skipped: id=%d err=%v",
+				"[Account] current extra unmarshal failed, runtime state preservation skipped: id=%d err=%v",
 				account.ID, err)
 			currentExtra = nil
 		}
 	}
-	extra := service.MergeOpenAICodexTicketExtra(copyJSONMap(normalizeJSONMap(account.Extra)), currentExtra)
+	extra := service.StripRetiredAccountExtra(copyJSONMap(normalizeJSONMap(account.Extra)))
 	for _, key := range []string{
 		service.UpstreamBillingProbeEnabledExtraKey,
 		service.UpstreamBillingRateSyncEnabledExtraKey,
@@ -1247,6 +1240,29 @@ func (r *accountRepository) ListWithFilters(ctx context.Context, params paginati
 		return nil, nil, err
 	}
 	return outAccounts, paginationResultFromTotal(int64(total), params), nil
+}
+
+func (r *accountRepository) ListPlatformCounts(ctx context.Context) ([]service.AccountPlatformCount, error) {
+	rows, err := r.sql.QueryContext(ctx, `
+		SELECT platform, COUNT(*)
+		FROM accounts
+		WHERE deleted_at IS NULL
+		GROUP BY platform
+		ORDER BY platform
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	counts := make([]service.AccountPlatformCount, 0)
+	for rows.Next() {
+		var item service.AccountPlatformCount
+		if err := rows.Scan(&item.Platform, &item.Count); err != nil {
+			return nil, err
+		}
+		counts = append(counts, item)
+	}
+	return counts, rows.Err()
 }
 
 func (r *accountRepository) ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]service.Account, error) {
@@ -2860,7 +2876,7 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 }
 
 func (r *accountRepository) UpdateExtra(ctx context.Context, id int64, updates map[string]any) error {
-	updates = stripCodexFingerprintSeedFromExtraUpdate(updates)
+	updates = stripCodexFingerprintSeedFromExtraUpdate(service.StripRetiredAccountExtra(updates))
 	if len(updates) == 0 {
 		return nil
 	}
@@ -3165,7 +3181,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	if len(ids) == 0 {
 		return 0, nil
 	}
-	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(updates.Extra)
+	updates.Extra = stripCodexFingerprintSeedFromExtraUpdate(service.StripRetiredAccountExtra(updates.Extra))
 
 	setClauses := make([]string, 0, 8)
 	args := make([]any, 0, 8)
@@ -3449,7 +3465,8 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	}
 	if rows > 0 && contextTx == nil {
 		_, limitChanged := updates.Extra[service.UpstreamBillingRateLimitExtraKey]
-		shouldSync := updates.ProxyID != nil || limitChanged
+		_, modelMappingChanged := updates.Credentials["model_mapping"]
+		shouldSync := updates.ProxyID != nil || limitChanged || modelMappingChanged
 		if updates.Status != nil && (*updates.Status == service.StatusError || *updates.Status == service.StatusDisabled) {
 			shouldSync = true
 		}

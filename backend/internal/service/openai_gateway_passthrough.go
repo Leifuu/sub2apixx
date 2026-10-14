@@ -214,7 +214,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 	if account != nil && account.IsOpenAI() {
 		responsesLite := isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) || isOpenAIResponsesLiteWebSocketPayload(body)
-		normalizedBody, normalized, normalizeErr := normalizeOpenAIResponsesWebSocketCompatibilityBody(body, account, responsesLite)
+		normalizedBody, normalized, normalizeErr := normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{
+			ResponsesLite: responsesLite,
+			Compact:       isOpenAIResponsesCompactPath(c),
+		})
 		if normalizeErr != nil {
 			return nil, fmt.Errorf("normalize passthrough Responses compatibility: %w", normalizeErr)
 		}
@@ -632,9 +635,6 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站（openai_codex_turn_state.go）。
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
-	if err := s.applyOpenAICodexTicket(ctx, account, extractOpenAICodexTicketModel(body), req.Header); err != nil {
-		return nil, err
-	}
 
 	// 覆盖入站鉴权残留，并注入上游认证
 	req.Header.Del("authorization")

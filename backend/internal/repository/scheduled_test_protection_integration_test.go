@@ -88,7 +88,7 @@ INSERT INTO account_groups VALUES(62,8),(62,9),(63,8);`)
 		"258_scheduled_test_protection.sql", "259_scheduled_test_outcome_actions.sql",
 		"260_scheduled_test_model_check.sql", "261_scheduled_test_admin_review.sql",
 		"262_scheduled_test_execution_snapshot.sql",
-		"264_scheduled_test_cache_recovery.sql", "265_scheduled_test_generic_policy.sql", "268_scheduled_test_combination_states.sql",
+		"264_scheduled_test_cache_recovery.sql", "265_scheduled_test_generic_policy.sql", "268_scheduled_test_combination_states.sql", "270_scheduled_test_time_periods.sql",
 	} {
 		raw, err := migrations.FS.ReadFile(name)
 		require.NoError(t, err)
@@ -226,7 +226,11 @@ INSERT INTO account_groups VALUES(62,8),(62,9),(63,8);`)
 		require.Equal(t, "quality_paused", status(), "reject votes win even if enough older passes exist")
 		visible, err := repo.ListVisible(ctx, 1, 3)
 		require.NoError(t, err)
-		require.Empty(t, visible, "ordinary results stay hidden for paused accounts")
+		require.Len(t, visible, 1, "paused accounts retain their latest visible result")
+		require.Equal(t, r.ID, visible[0].ID)
+		require.NotNil(t, visible[0].AccountSchedulable)
+		require.False(t, *visible[0].AccountSchedulable)
+		require.Equal(t, "quality_paused", status(), "showing a result must not resume scheduling")
 		votes, err := repo.ListVotingResults(ctx, 1)
 		require.NoError(t, err)
 		require.Len(t, votes, 1)
@@ -314,6 +318,7 @@ INSERT INTO account_groups VALUES(62,8),(62,9),(63,8);`)
 		cast(2, r.ID, "fail")
 		p.Name = "renamed"
 		p.CronExpression = "*/5 * * * *"
+		p.Schedule = &service.ScheduledTestSchedule{Timezone: "Asia/Shanghai", Periods: []service.ScheduledTestSchedulePeriod{{Start: "08:00", End: "20:00", IntervalMinutes: 60}}}
 		p, err = plans.Update(ctx, p)
 		require.NoError(t, err)
 		require.Equal(t, "quality_paused", status())

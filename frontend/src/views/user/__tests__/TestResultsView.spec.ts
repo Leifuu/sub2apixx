@@ -45,39 +45,82 @@ describe('channel quality result groups', () => {
     wrapper.unmount()
   })
 
-  it('uses admin access for paused account history and filters out other accounts and tests', async () => {
+  it('keeps paused accounts and their results in the shared quality page', async () => {
     api.isAdmin = true
-    api.list.mockResolvedValue([])
-    const result = { ...baseResult, id: 91 }
+    const result = { ...baseResult, id: 91, group_id: 9, group_name: 'Paused Group', model_id: 'paused-model' }
+    const other = { ...baseResult, id: 92, account_id: 99 }
+    api.list.mockResolvedValue([result, { ...result, id: 93, test_definition_id: 5 }, other])
     api.reviews.mockResolvedValue([{ result, generation: 7, verdict: 'fail', admin_verdict: 'fail', account_paused: true }])
-    api.adminResults.mockResolvedValue([result, { ...result, id: 92, account_id: 99 }, { ...result, id: 93, test_definition_id: 5 }, { ...result, id: 94, status: 'failed' }])
+    api.votes.mockResolvedValue([{ result, voting: { enabled: true, open: true } }])
     const wrapper = mountResults(); await flushPromises()
-    await wrapper.get('[data-test-section] button').trigger('click'); await flushPromises()
-    expect(api.adminResults).toHaveBeenCalledWith(10, 21)
-    expect(api.history).not.toHaveBeenCalled()
-    expect(wrapper.get('[data-dialog]').findAll('[data-output]').map(output => output.attributes('data-result-id'))).toEqual(['91'])
+    expect(wrapper.findAll('[data-account-result]')).toHaveLength(1)
+    expect(wrapper.get('[data-account-result] h3').text()).toContain('#99')
+    await wrapper.findAll('[role="tab"]')[1].trigger('click')
+    expect(wrapper.get('[data-account-info]').text()).toContain('#3')
+    expect(wrapper.get('[data-scheduling-status]').text()).toContain('tests.schedulingPaused')
+    expect(wrapper.findAll('[data-test-section]')).toHaveLength(2)
+    expect(wrapper.find('[data-voting-section]').exists()).toBe(false)
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['Group Eight', 'Paused Group'])
+    expect(wrapper.findAll('select option').map(option => option.text())).toContain('paused-model')
     wrapper.unmount()
   })
 
-  it('shows administrator decisions for current paused results and refreshes after a verdict', async () => {
+  it('keeps administrator decisions available for paused results', async () => {
     api.isAdmin = true
     api.list.mockResolvedValue([])
     const result = { ...baseResult, id: 91, account_name: 'Review Account' }
     const review = { result, generation: 7, verdict: 'pending', admin_verdict: '', account_paused: true }
     api.reviews.mockResolvedValue([review])
+    const wrapper = mountResults(); await flushPromises()
+    expect(wrapper.find('[data-account-result]').exists()).toBe(true)
+    expect(wrapper.find('[data-admin-decision]').exists()).toBe(true)
+    expect(wrapper.get('[data-scheduling-status]').text()).toContain('tests.schedulingPaused')
+    wrapper.unmount()
+  })
+
+  it('updates scheduling without removing the account after an administrator pauses it', async () => {
+    api.isAdmin = true
+    const result = { ...baseResult, id: 91, account_name: 'Review Account' }
+    const review = { result, generation: 7, verdict: 'pending', admin_verdict: '', account_paused: false }
+    // A public result can still be in flight while the decision pauses its account.
+    api.list.mockResolvedValue([result])
+    api.reviews.mockResolvedValueOnce([review])
+      .mockResolvedValue([{ ...review, verdict: 'fail', admin_verdict: 'fail', account_paused: true }])
     api.decide.mockResolvedValue(undefined)
     const wrapper = mountResults(); await flushPromises()
     expect(wrapper.get('[data-account-info]').text()).toContain('Review Account')
-    expect(wrapper.get('[data-admin-decision]').text()).toContain('tests.voting.paused')
-    api.reviews.mockResolvedValue([{ ...review, verdict: 'pass', admin_verdict: 'pass', account_paused: false }])
-    await wrapper.get('[data-admin-pass]').trigger('click'); await flushPromises()
-    expect(api.decide).toHaveBeenCalledWith(91, 7, 'pass')
-    expect(wrapper.get('[data-admin-pass]').attributes('disabled')).toBeDefined()
-    api.reviews.mockResolvedValue([{ ...review, verdict: 'fail', admin_verdict: 'fail' }])
     await wrapper.get('[data-admin-fail]').trigger('click'); await flushPromises()
-    expect(api.decide).toHaveBeenLastCalledWith(91, 7, 'fail')
-    expect(wrapper.get('[data-admin-fail]').attributes('disabled')).toBeDefined()
+    expect(api.decide).toHaveBeenCalledWith(91, 7, 'fail')
+    expect(wrapper.find('[data-account-result]').exists()).toBe(true)
+    expect(wrapper.find('[data-admin-decision]').exists()).toBe(true)
+    expect(wrapper.get('[data-scheduling-status]').text()).toContain('tests.schedulingPaused')
+    expect(wrapper.findAll('[role="tab"]')).toHaveLength(1)
     expect(api.vote).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('keeps paused account history open and refreshes scheduling after recovery', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    api.isAdmin = true
+    const result = { ...baseResult, id: 91 }
+    const review = { result, generation: 7, verdict: 'pending', admin_verdict: '', account_paused: false }
+    api.list.mockResolvedValue([result])
+    api.reviews.mockResolvedValue([review])
+    let resolveHistory!: (value: unknown) => void
+    api.adminResults.mockReturnValue(new Promise(resolve => { resolveHistory = resolve }))
+    const wrapper = mountResults(); await flushPromises()
+    await wrapper.get('[data-test-section] button').trigger('click'); await flushPromises()
+    expect(wrapper.find('[data-dialog]').exists()).toBe(true)
+    api.reviews.mockResolvedValue([{ ...review, account_paused: true }])
+    await vi.advanceTimersByTimeAsync(5000); await flushPromises()
+    expect(wrapper.find('[data-dialog]').exists()).toBe(true)
+    expect(wrapper.find('[data-account-result]').exists()).toBe(true)
+    expect(wrapper.get('[data-scheduling-status]').text()).toContain('tests.schedulingPaused')
+    resolveHistory([result]); await flushPromises()
+    expect(wrapper.find('[data-dialog] [data-output]').exists()).toBe(true)
+    api.reviews.mockResolvedValue([review])
+    await vi.advanceTimersByTimeAsync(5000); await flushPromises()
+    expect(wrapper.get('[data-result-gallery] [data-output]').attributes('data-result-id')).toBe('91')
     wrapper.unmount()
   })
 
@@ -86,7 +129,7 @@ describe('channel quality result groups', () => {
     const initial = { ...baseResult, id: 101, group_id: 8, group_name: 'Source Group' }
     const moved = { ...initial, group_id: 12, group_name: 'Target Group', protection_decision: { verdict: 'pass', status: 'applied', scheduling: 'resume' } }
     api.list.mockResolvedValueOnce([initial]).mockResolvedValueOnce([moved])
-    api.reviews.mockResolvedValueOnce([{ result: initial, generation: 4, verdict: 'pending', admin_verdict: '', account_paused: true }])
+    api.reviews.mockResolvedValueOnce([{ result: initial, generation: 4, verdict: 'pending', admin_verdict: '', account_paused: false }])
       .mockResolvedValueOnce([{ result: moved, generation: 4, verdict: 'pass', admin_verdict: 'pass', account_paused: false }])
     api.decide.mockResolvedValue(undefined)
     const wrapper = mountResults(); await flushPromises()
@@ -238,6 +281,37 @@ describe('channel quality result groups', () => {
 })
 
 describe('channel quality result series', () => {
+  it('expands the latest artwork locally and retains its administrator review controls', async () => {
+    api.isAdmin = true
+    const result = { ...baseResult, id: 91, output_html: '<svg />' }
+    api.list.mockResolvedValue([result])
+    api.reviews.mockResolvedValue([{ result, generation: 7, verdict: 'pending', admin_verdict: '', account_paused: false }])
+    api.decide.mockResolvedValue(undefined)
+    const wrapper = mountResults(); await flushPromises()
+    await wrapper.get('[data-expand-preview]').trigger('click')
+    const dialog = wrapper.get('[data-dialog]')
+    expect(dialog.get('[data-output]').attributes('data-result-id')).toBe('91')
+    expect(dialog.get('[data-output]').attributes('data-compact')).toBeUndefined()
+    expect(api.history).not.toHaveBeenCalled()
+    expect(api.adminResults).not.toHaveBeenCalled()
+    await dialog.get('[data-admin-fail]').trigger('click'); await flushPromises()
+    expect(api.decide).toHaveBeenCalledWith(91, 7, 'fail')
+    await dialog.get('[data-close]').trigger('click')
+    expect(wrapper.find('[data-dialog]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('closes an expanded preview if the result is no longer visible after refresh', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    api.list.mockResolvedValueOnce([{ ...baseResult, id: 1, output_html: '<svg />' }]).mockResolvedValue([])
+    const wrapper = mountResults(); await flushPromises()
+    await wrapper.get('[data-expand-preview]').trigger('click')
+    expect(wrapper.find('[data-dialog]').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(5000); await flushPromises()
+    expect(wrapper.find('[data-dialog]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('shows only the latest output and fetches complete history on demand', async () => {
     const results = [1, 2, 3, 4, 5].map(id => ({ ...baseResult, id, created_at: `2026-09-15T${10 + id}:00:00Z` }))
     api.list.mockResolvedValue(results)
@@ -331,30 +405,34 @@ describe('channel quality result series', () => {
     wrapper.unmount()
   })
 
-  it('shows the latest successful output and removes failed records from cards and history', async () => {
+  it('shows the latest failed output and retains successful history', async () => {
     const results = [
       { ...baseResult, id: 3, status: 'failed', error_message: 'private upstream failure', created_at: '2026-09-15T14:00:00Z' },
       { ...baseResult, id: 2, status: 'success' },
       { ...baseResult, id: 1, status: 'passed' },
     ]
-    api.list.mockResolvedValue(results)
+    api.list.mockResolvedValue([results[0]])
     api.history.mockResolvedValue({ items: results })
     const wrapper = mountResults()
     await flushPromises()
-    expect(wrapper.findAll('[data-result-gallery] [data-output]').map(output => output.attributes('data-result-id'))).toEqual(['2'])
+    expect(wrapper.findAll('[data-result-gallery] [data-output]').map(output => output.attributes('data-result-id'))).toEqual(['3'])
+    expect(wrapper.get('[data-content-test] .badge').text()).toBe('tests.failed')
+    expect(wrapper.get('[data-content-test] .badge').classes()).toContain('badge-danger')
     await wrapper.get('[data-content-test] button').trigger('click')
     await flushPromises()
+    expect(api.history).toHaveBeenCalledWith(3, undefined)
     expect(wrapper.findAll('[data-dialog] [data-output]').map(output => output.attributes('data-result-id'))).toEqual(['2', '1'])
     expect(wrapper.text()).not.toContain('private')
     wrapper.unmount()
   })
 
-  it('shows an empty state if every result failed', async () => {
+  it('keeps the result list visible if every result failed', async () => {
     api.list.mockResolvedValue([{ ...baseResult, id: 1, status: 'failed' }])
     const wrapper = mountResults()
     await flushPromises()
-    expect(wrapper.text()).toContain('tests.empty')
-    expect(wrapper.find('[role="tablist"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('tests.failed')
+    expect(wrapper.find('[role="tablist"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-account-result]')).toHaveLength(1)
     wrapper.unmount()
   })
 
@@ -446,7 +524,25 @@ describe('channel quality result series', () => {
 
 
 describe('public quality voting follows the configured entries', () => {
-  const voting = { enabled: true, open: true, pass_count: 0, fail_count: 0, reject_above: 0, pass_at_least: 2, account_paused: true, reference_answer: '<b>Expected answer</b>' }
+  const voting = { enabled: true, open: true, pass_count: 0, fail_count: 0, reject_above: 0, pass_at_least: 2, account_paused: false, reference_answer: '<b>Expected answer</b>' }
+
+  it('keeps regular paused results visible without enabling paused votes', async () => {
+    const result = { ...baseResult, id: 44 }
+    api.list.mockResolvedValue([result, { ...result, id: 45, test_definition_id: 2, output_kind: 'number', output_numeric: 21 }])
+    api.votes.mockResolvedValue([
+      { result, voting: { ...voting, account_paused: true } },
+      { result: { ...result, id: 46, test_definition_id: 3 }, voting },
+      { result: { ...result, id: 47, account_id: 99, group_id: 9, group_name: 'Voting only' }, voting: { ...voting, account_paused: true } },
+    ])
+    const wrapper = mountResults(); await flushPromises()
+    expect(wrapper.find('[data-account-result]').exists()).toBe(true)
+    expect(wrapper.get('[data-scheduling-status]').text()).toContain('tests.schedulingPaused')
+    expect(wrapper.find('[data-voting-section]').exists()).toBe(false)
+    expect(wrapper.findAll('[role="tab"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-test-section]')).toHaveLength(2)
+    expect(api.reviews).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
 
   it('keeps the voting area hidden when no entries are enabled', async () => {
     api.list.mockResolvedValue([{ ...baseResult, id: 1 }])
@@ -784,6 +880,48 @@ describe('current group display order', () => {
     expect(wrapper.getComponent(TestVoteCard).props('item').result).toMatchObject({ id: 2, group_id: 2, group_name: 'Pro', group_order: 1, plan_order: 0 })
     await wrapper.findAll('[role="tab"]')[2].trigger('click')
     expect(wrapper.get('[data-vote-result]').attributes('data-vote-result')).toBe('3')
+    wrapper.unmount()
+  })
+})
+
+
+describe('current scheduling and passing result order', () => {
+  it('places passing active accounts first and reorders after scheduling changes', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const paused = { ...baseResult, id: 1, account_id: 1, account_schedulable: false }
+    const failed = { ...baseResult, id: 2, account_id: 2, account_schedulable: true, status: 'failed' }
+    const passed = { ...baseResult, id: 3, account_id: 3, account_schedulable: true }
+    const mismatch = { ...baseResult, id: 4, account_id: 4, account_schedulable: true, output_kind: 'model_check', output_model_check: { verdict: 'fail' } }
+    api.list.mockResolvedValueOnce([paused, failed, mismatch, passed])
+      .mockResolvedValue([{ ...paused, account_schedulable: true }, failed, mismatch, { ...passed, account_schedulable: false }])
+    const wrapper = mountResults(); await flushPromises()
+    const order = () => wrapper.findAll('[data-account-info] h3').map(node => node.text())
+    expect(order()).toEqual(['tests.account #3', 'tests.account #2', 'tests.account #4', 'tests.account #1'])
+    const statuses = wrapper.findAll('[data-scheduling-status]')
+    expect(statuses[0].text()).toContain('tests.schedulingActive')
+    expect(statuses[0].get('.text-emerald-600').text()).toContain('tests.schedulingActive')
+    expect(statuses[3].text()).toContain('tests.schedulingPaused')
+    expect(statuses[3].get('.text-red-600').text()).toContain('tests.schedulingPaused')
+    await vi.advanceTimersByTimeAsync(5000); await flushPromises()
+    expect(order()).toEqual(['tests.account #1', 'tests.account #2', 'tests.account #4', 'tests.account #3'])
+    wrapper.unmount()
+  })
+
+  it('uses the live scheduling switch instead of inferring it from execution success or old reviews', async () => {
+    api.isAdmin = true
+    const result = { ...baseResult, id: 1, account_schedulable: false }
+    api.list.mockResolvedValue([result])
+    api.reviews.mockResolvedValue([{ result, generation: 1, verdict: 'pass', admin_verdict: 'pass', account_paused: false }])
+    const wrapper = mountResults(); await flushPromises()
+    expect(wrapper.get('[data-scheduling-status]').text()).toContain('tests.schedulingPaused')
+    expect(wrapper.get('[data-test-section] .badge').text()).toBe('tests.completed')
+    wrapper.unmount()
+  })
+
+  it('does not invent an account scheduling state for group statistics', async () => {
+    api.list.mockResolvedValue([{ ...baseResult, id: 1, account_id: null, target_mode: 'group', output_kind: 'statistics' }])
+    const wrapper = mountResults(); await flushPromises()
+    expect(wrapper.find('[data-scheduling-status]').exists()).toBe(false)
     wrapper.unmount()
   })
 })

@@ -1007,6 +1007,8 @@ type GatewayConfig struct {
 	ProxyProbeResponseReadMaxBytes int64 `mapstructure:"proxy_probe_response_read_max_bytes"`
 	// Gemini 上游响应头调试日志开关（默认关闭，避免高频日志开销）
 	GeminiDebugResponseHeaders bool `mapstructure:"gemini_debug_response_headers"`
+	// GeminiCachedContentMaxTTLSeconds: Gemini 显式缓存单次可设置的最长有效期（秒），<=0 时按 86400 处理
+	GeminiCachedContentMaxTTLSeconds int `mapstructure:"gemini_cached_content_max_ttl_seconds"`
 	// ConnectionPoolIsolation: 上游连接池隔离策略（proxy/account/account_proxy）
 	ConnectionPoolIsolation string `mapstructure:"connection_pool_isolation"`
 	// ForceCodexCLI: 强制将 OpenAI `/v1/responses` 请求按 Codex CLI 处理。
@@ -1039,9 +1041,6 @@ type GatewayConfig struct {
 	// OpenAICompactModel: /responses/compact 上游使用的模型。
 	// compact 端点支持模型滞后于普通 /responses 时，可用该配置降级规避上游错误。
 	OpenAICompactModel string `mapstructure:"openai_compact_model"`
-	// OpenAICodexTicket: ChatGPT OAuth 账号按 (账号, 模型) 捕获套餐对应长度
-	// x-codex-turn-state，并在住宅 IP 业务请求中注入该头。默认关闭。
-	OpenAICodexTicket OpenAICodexTicketConfig `mapstructure:"openai_codex_ticket"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// Live: ChatGPT Frameless Live 会话配置。
@@ -1254,46 +1253,6 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 		return UMQModeSerialize // 向后兼容
 	}
 	return ""
-}
-
-// OpenAICodexTicketConfig 提供 ChatGPT OAuth 门票的周期和模型配置。
-// Enabled 是网关总开关，打票与业务请求使用同一个账号出口。
-// 账号通过 extra 的 codex_ticket_* 保留启用和缺票策略；Pro 使用 292，Team/Business 使用 332。
-// TargetLength 是其他/未知套餐的默认长度，FailClosed 兼容未配置账号策略的旧账号。
-// 打票请求独立调度；未配置代理的账号直连，292 门票还需携带账号路由 Cookie。
-// 门票默认最多有效 240 秒，默认提前 60 秒重新打票。
-type OpenAICodexTicketConfig struct {
-	Enabled                      bool     `mapstructure:"enabled"`
-	TargetLength                 int      `mapstructure:"target_length"`
-	TTLSeconds                   int      `mapstructure:"ttl_seconds"`
-	RefreshBeforeSeconds         int      `mapstructure:"refresh_before_seconds"`
-	HarvestProbeIntervalSeconds  int      `mapstructure:"harvest_probe_interval_seconds"`
-	HarvestAttemptTimeoutSeconds int      `mapstructure:"harvest_attempt_timeout_seconds"`
-	HarvestMaxConcurrent         int      `mapstructure:"harvest_max_concurrent"`
-	HarvestAccountConcurrency    int      `mapstructure:"harvest_account_concurrency"`
-	HarvestProxyConcurrency      int      `mapstructure:"harvest_proxy_concurrency"`
-	FailClosed                   bool     `mapstructure:"fail_closed"`
-	Models                       []string `mapstructure:"models"`
-}
-
-const (
-	DefaultOpenAICodexTicketTTLSeconds           = 240
-	DefaultOpenAICodexTicketRefreshBeforeSeconds = 60
-)
-
-// NormalizeOpenAICodexTicketTiming keeps old deployments within the shortened
-// ticket lifetime. Both ticket lengths share this conservative limit until the
-// upstream provides a separate lifetime for 332 tickets. Limit the refresh lead
-// to one quarter of the lifetime so legacy values cannot cause continuous renewals.
-func NormalizeOpenAICodexTicketTiming(cfg OpenAICodexTicketConfig) OpenAICodexTicketConfig {
-	if cfg.TTLSeconds <= 0 || cfg.TTLSeconds > DefaultOpenAICodexTicketTTLSeconds {
-		cfg.TTLSeconds = DefaultOpenAICodexTicketTTLSeconds
-	}
-	if cfg.RefreshBeforeSeconds <= 0 {
-		cfg.RefreshBeforeSeconds = DefaultOpenAICodexTicketRefreshBeforeSeconds
-	}
-	cfg.RefreshBeforeSeconds = min(cfg.RefreshBeforeSeconds, cfg.TTLSeconds/4)
-	return cfg
 }
 
 // DefaultOpenAIWSClientFirstMessageTimeoutSeconds preserves the legacy ingress deadline.
@@ -2135,6 +2094,7 @@ func setDefaults() {
 		"api.openai.com",
 		"api.anthropic.com",
 		"api.kimi.com",
+		"api.kimi.ai",
 		"api.moonshot.ai",
 		"api.moonshot.cn",
 		"open.bigmodel.cn",
@@ -2478,17 +2438,6 @@ func setDefaults() {
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.5")
-	viper.SetDefault("gateway.openai_codex_ticket.enabled", false)
-	viper.SetDefault("gateway.openai_codex_ticket.target_length", 292)
-	viper.SetDefault("gateway.openai_codex_ticket.ttl_seconds", DefaultOpenAICodexTicketTTLSeconds)
-	viper.SetDefault("gateway.openai_codex_ticket.refresh_before_seconds", DefaultOpenAICodexTicketRefreshBeforeSeconds)
-	viper.SetDefault("gateway.openai_codex_ticket.harvest_probe_interval_seconds", 6)
-	viper.SetDefault("gateway.openai_codex_ticket.harvest_attempt_timeout_seconds", 25)
-	viper.SetDefault("gateway.openai_codex_ticket.harvest_max_concurrent", 8)
-	viper.SetDefault("gateway.openai_codex_ticket.harvest_account_concurrency", 1)
-	viper.SetDefault("gateway.openai_codex_ticket.harvest_proxy_concurrency", 2)
-	viper.SetDefault("gateway.openai_codex_ticket.fail_closed", true)
-	viper.SetDefault("gateway.openai_codex_ticket.models", []string{"gpt-6-astra", "gpt-5.6-sol"})
 	viper.SetDefault("gateway.live.max_session_duration_seconds", 3600)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
@@ -2583,6 +2532,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.models_list_read_max_bytes", DefaultModelsListReadMaxBytes)
 	viper.SetDefault("gateway.proxy_probe_response_read_max_bytes", int64(1024*1024))
 	viper.SetDefault("gateway.gemini_debug_response_headers", false)
+	viper.SetDefault("gateway.gemini_cached_content_max_ttl_seconds", 86400)
 	viper.SetDefault("gateway.connection_pool_isolation", ConnectionPoolIsolationAccountProxy)
 	// HTTP 上游连接池配置（针对 5000+ 并发用户优化）
 	viper.SetDefault("gateway.max_idle_conns", 2560)          // 最大空闲连接总数（高并发场景可调大）
@@ -2760,7 +2710,6 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
-	c.Gateway.OpenAICodexTicket = NormalizeOpenAICodexTicketTiming(c.Gateway.OpenAICodexTicket)
 	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
 	if err != nil {
 		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)

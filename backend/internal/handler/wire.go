@@ -56,8 +56,6 @@ func ProvideAdminHandlers(
 ) *AdminHandlers {
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
-	accountHandler.SetCodexTicketSettings(settingService)
-	accountHandler.SetCodexTicketGateway(openAIGateway)
 	accountHandler.SetOpenCodeGoUsageService(opencodeGoUsage)
 	accountHandler.SetClaudeResetCreditService(claudeResetCredits)
 	return &AdminHandlers{
@@ -117,11 +115,13 @@ func ProvideGatewayHandler(
 	cfg *config.Config,
 	settingService *service.SettingService,
 	coordinator *securityaudit.Coordinator,
+	geminiCachedContentService *service.GeminiCachedContentService,
 ) *GatewayHandler {
 	h := NewGatewayHandler(gatewayService, openAIGatewayService, geminiCompatService, antigravityGatewayService,
 		userService, concurrencyService, billingCacheService, usageService, apiKeyService, usageRecordWorkerPool,
 		errorPassthroughService, contentModerationService, userMsgQueueService, cfg, settingService)
 	h.securityAuditCoordinator = coordinator
+	h.geminiCachedContentService = geminiCachedContentService
 	return h
 }
 

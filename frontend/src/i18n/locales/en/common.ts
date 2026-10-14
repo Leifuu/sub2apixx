@@ -220,7 +220,10 @@ export default {
   },
 
   tests: {
+    currentScheduling: 'Current scheduling', schedulingActive: 'Active', schedulingPaused: 'Paused', failed: 'Failed',
+    expandPreview: 'Expand preview',
     adminReview: {
+      details: 'Review details',
       roundOverrideHint: 'Administrator decisions override ordinary rules for this round. Promotion still requires every required automatic condition to pass. Assigning groups replaces all existing groups; the next round starts fresh.',
       title: 'Admin decision', markPass: 'Mark as passed', markFail: 'Mark as failed',
       pass: 'Marked as passed', fail: 'Marked as failed',
@@ -249,6 +252,8 @@ export default {
     statisticsSuccessRate: 'Success rate', statisticsCacheRate: 'Cache rate', statisticsFirstToken: 'Average first token',
     statisticsRequestSamples: '{success} / {total} requests succeeded', statisticsTokenSamples: '{cached} / {input} input tokens cached', statisticsFirstTokenSamples: '{count} timed requests',
     statisticsWindow: 'Window', statisticsUpdated: 'Updated',
+    statisticsProbeSuccess: 'Insufficient samples; connectivity probe passed. Other checks still apply.',
+    statisticsProbeFailed: 'Insufficient samples; connectivity probe failed. Scheduling remains paused.',
     statisticsSourceHint: 'Based on recorded requests in the last hour. Cache rate is weighted by input tokens; time to first token is the average of valid timing samples.',
     statisticsRecentRequests: 'Recent requests', statisticsRecentRequestsHint: 'Last 10 requests, oldest to newest from left to right', statisticsRequestSuccess: 'Succeeded', statisticsRequestFailure: 'Failed',
     loadMore: 'Load more',

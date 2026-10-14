@@ -149,7 +149,8 @@ type createScheduledTestPlanRequest struct {
 	TestDefinitionIDs []int64                               `json:"test_definition_ids" binding:"required"`
 	ModelID           string                                `json:"model_id"`
 	ReasoningEffort   string                                `json:"reasoning_effort"`
-	CronExpression    string                                `json:"cron_expression" binding:"required"`
+	CronExpression    string                                `json:"cron_expression"`
+	Schedule          *service.ScheduledTestSchedule        `json:"schedule"`
 	Enabled           *bool                                 `json:"enabled"`
 	MaxResults        int                                   `json:"max_results"`
 	AutoRecover       *bool                                 `json:"auto_recover"`
@@ -164,6 +165,7 @@ type updateScheduledTestPlanRequest struct {
 	ModelID           string                                 `json:"model_id"`
 	ReasoningEffort   json.RawMessage                        `json:"reasoning_effort"`
 	CronExpression    string                                 `json:"cron_expression"`
+	Schedule          json.RawMessage                        `json:"schedule"`
 	Enabled           *bool                                  `json:"enabled"`
 	MaxResults        int                                    `json:"max_results"`
 	AutoRecover       *bool                                  `json:"auto_recover"`
@@ -184,6 +186,21 @@ func (h *ScheduledTestHandler) ListByAccount(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, plans)
+}
+
+// AccountProtectionDetails GET /admin/accounts/:id/quality-protection
+func (h *ScheduledTestHandler) AccountProtectionDetails(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || accountID <= 0 {
+		response.BadRequest(c, "invalid account id")
+		return
+	}
+	details, err := h.scheduledTestSvc.AccountProtectionDetails(c.Request.Context(), accountID)
+	if err != nil {
+		response.InternalError(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, details)
 }
 
 func (h *ScheduledTestHandler) ListPlans(c *gin.Context) {
@@ -210,6 +227,7 @@ func (h *ScheduledTestHandler) Create(c *gin.Context) {
 		ModelID:           req.ModelID,
 		ReasoningEffort:   req.ReasoningEffort,
 		CronExpression:    req.CronExpression,
+		Schedule:          req.Schedule,
 		Enabled:           true,
 		MaxResults:        req.MaxResults,
 		Protection:        req.Protection,
@@ -305,6 +323,16 @@ func (h *ScheduledTestHandler) Update(c *gin.Context) {
 
 	if req.CronExpression != "" {
 		existing.CronExpression = req.CronExpression
+	}
+	// Omitted schedules survive partial updates. Explicit null switches back
+	// to cron, whose value must still pass the service's validation.
+	if len(req.Schedule) > 0 {
+		var schedule *service.ScheduledTestSchedule
+		if err := json.Unmarshal(req.Schedule, &schedule); err != nil {
+			response.BadRequest(c, "invalid schedule")
+			return
+		}
+		existing.Schedule = schedule
 	}
 	if req.Enabled != nil {
 		existing.Enabled = *req.Enabled

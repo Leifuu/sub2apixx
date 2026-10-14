@@ -68,7 +68,7 @@ INSERT INTO groups(id,name) VALUES(8,'Source tier'),(10,'Higher tier'),(11,'Unre
 		"260_scheduled_test_model_check.sql", "260_scheduled_test_model_check.sql",
 		"261_scheduled_test_admin_review.sql",
 		"262_scheduled_test_execution_snapshot.sql",
-		"264_scheduled_test_cache_recovery.sql", "265_scheduled_test_generic_policy.sql", "268_scheduled_test_combination_states.sql",
+		"264_scheduled_test_cache_recovery.sql", "265_scheduled_test_generic_policy.sql", "268_scheduled_test_combination_states.sql", "270_scheduled_test_time_periods.sql",
 	} {
 		raw, err := migrations.FS.ReadFile(name)
 		require.NoError(t, err)
@@ -154,7 +154,8 @@ INSERT INTO account_groups(account_id,group_id) VALUES(62,8),(62,11);`)
 		for i := range checks {
 			stored = append(stored, persist(t, plan, "success", &checks[i]))
 		}
-		persist(t, plan, "failed", &service.ScheduledTestModelCheck{RequestedModel: plan.ModelID, UpstreamModel: "gpt-5.6-sol", ReturnedModels: []string{}, MatchMode: "exact", Verdict: "unknown", Reason: "upstream_error"})
+		failedCheck := service.ScheduledTestModelCheck{RequestedModel: plan.ModelID, UpstreamModel: "gpt-5.6-sol", ReturnedModels: []string{}, MatchMode: "exact", Verdict: "unknown", Reason: "upstream_error"}
+		failed := persist(t, plan, "failed", &failedCheck)
 		adminRows, err := svc.ListResults(ctx, plan.ID, 10)
 		require.NoError(t, err)
 		require.Len(t, adminRows, 5)
@@ -167,7 +168,10 @@ INSERT INTO account_groups(account_id,group_id) VALUES(62,8),(62,11);`)
 		}
 		visible, err := svc.ListVisibleResults(ctx, 1, 3)
 		require.NoError(t, err)
-		require.Empty(t, visible, "the latest failed execution must not fall back to older successful model checks")
+		require.Len(t, visible, 1)
+		require.Equal(t, failed.ID, visible[0].ID, "show the latest failure without falling back to an older successful model check")
+		require.Equal(t, "failed", visible[0].Status)
+		assertSnapshot(t, visible[0], failedCheck, true)
 		latest := persist(t, plan, "success", &checks[3])
 		visible, err = svc.ListVisibleResults(ctx, 1, 3)
 		require.NoError(t, err)

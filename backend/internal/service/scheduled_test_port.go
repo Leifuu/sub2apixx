@@ -23,6 +23,7 @@ type ScheduledTestPlan struct {
 	ModelID           string                        `json:"model_id"`
 	ReasoningEffort   string                        `json:"reasoning_effort,omitempty"`
 	CronExpression    string                        `json:"cron_expression"`
+	Schedule          *ScheduledTestSchedule        `json:"schedule,omitempty"`
 	Enabled           bool                          `json:"enabled"`
 	MaxResults        int                           `json:"max_results"`
 	AutoRecover       bool                          `json:"auto_recover"`
@@ -61,7 +62,8 @@ type ScheduledTestResult struct {
 	ReturnedModels       []string                         `json:"-"`
 	ModelEvidenceInvalid bool                             `json:"-"`
 	AccountID            *int64                           `json:"account_id,omitempty"`
-	AccountName          string                           `json:"account_name,omitempty"` // populated by admin queries only
+	AccountSchedulable   *bool                            `json:"account_schedulable,omitempty"` // current account status and scheduling switch; nil for account-free results
+	AccountName          string                           `json:"account_name,omitempty"`        // populated by admin queries only
 	ModelID              string                           `json:"model_id"`
 	ReasoningEffort      string                           `json:"reasoning_effort,omitempty"`
 	GroupID              *int64                           `json:"group_id,omitempty"`
@@ -110,6 +112,7 @@ type ScheduledTestStatistics struct {
 	CacheInputTokens  int64                        `json:"cache_input_tokens"`
 	CacheSamples      int64                        `json:"cache_samples"`
 	RecentRequests    []ScheduledTestRecentRequest `json:"recent_requests"`
+	RecoveryProbe     *ScheduledTestRecoveryProbe  `json:"recovery_probe,omitempty"`
 }
 
 // ScheduledTestRecentRequest deliberately contains no request or account details.
@@ -161,7 +164,8 @@ type ScheduledTestPlanRepository interface {
 	ListDue(ctx context.Context, now time.Time) ([]*ScheduledTestPlan, error)
 	Update(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error)
 	Delete(ctx context.Context, id int64) error
-	UpdateAfterRun(ctx context.Context, id int64, lastRunAt time.Time, nextRunAt time.Time) error
+	UpdateAfterRun(ctx context.Context, plan *ScheduledTestPlan, lastRunAt time.Time, nextRunAt time.Time) error
+	UpdateNextRun(ctx context.Context, plan *ScheduledTestPlan, nextRunAt time.Time) error
 }
 
 type ScheduledTestDefinitionRepository interface {

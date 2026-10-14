@@ -21,6 +21,14 @@ import (
 )
 
 // Account management implementations
+func (s *adminServiceImpl) ListAccountPlatformCounts(ctx context.Context) ([]AccountPlatformCount, error) {
+	repo, ok := s.accountRepo.(AccountPlatformCountRepository)
+	if !ok {
+		return nil, errors.New("account platform counts repository is not configured")
+	}
+	return repo.ListPlatformCounts(ctx)
+}
+
 func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error) {
 	if groupID > 0 {
 		if err := s.ValidateAccountGroupBindings(ctx, []int64{groupID}); err != nil {
@@ -324,7 +332,7 @@ func (s *adminServiceImpl) DuplicateAccount(ctx context.Context, id int64, actor
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
-	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
+	if err := NormalizeProtocolRulesCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
 	duplicate, err := buildAccountForCreate(input, accountExtra)
@@ -412,12 +420,7 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
-	accountExtra = MergeOpenAICodexTicketExtra(accountExtra, nil)
-	var err error
-	accountExtra, err = normalizeOpenAICodexTicketAccountExtra(input.Platform, accountExtra, true)
-	if err != nil {
-		return nil, err
-	}
+	accountExtra = StripRetiredAccountExtra(accountExtra)
 	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}
@@ -517,10 +520,6 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
-	accountExtra, err = normalizeOpenAICodexTicketAccountExtra(input.Platform, accountExtra, true)
-	if err != nil {
-		return nil, err
-	}
 	if err := ValidateUpstreamRequestIDHeaderExtra(accountExtra); err != nil {
 		return nil, err
 	}
@@ -552,7 +551,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
-	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
+	if err := NormalizeProtocolRulesCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
 	// Never persist ephemeral SSO/password secrets after OAuth conversion.
@@ -630,10 +629,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err != nil {
 			return nil, err
 		}
-		normalizedExtra, err = normalizeOpenAICodexTicketAccountUpdateExtra(account, normalizedExtra)
-		if err != nil {
-			return nil, err
-		}
 		if err := ValidateUpstreamRequestIDHeaderExtra(normalizedExtra); err != nil {
 			return nil, err
 		}
@@ -689,7 +684,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
 			return nil, err
 		}
-		if err := NormalizeOpenCodeGoProtocolRulesCredentials(account.Credentials); err != nil {
+		if err := NormalizeProtocolRulesCredentials(account.Credentials); err != nil {
 			return nil, err
 		}
 		// Strip SSO/password residue that must never sit next to OAuth tokens.
@@ -747,7 +742,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 				normalizedExtra[key] = v
 			}
 		}
-		normalizedExtra = MergeOpenAICodexTicketExtra(normalizedExtra, account.Extra)
+		normalizedExtra = StripRetiredAccountExtra(normalizedExtra)
 		normalizedExtra = prepareCodexFingerprintExtraForUpdate(account, normalizedExtra)
 		account.Extra = normalizedExtra
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
@@ -934,8 +929,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 	}
 
-	// Retire account-owned harvest proxies even when only another field was edited.
-	delete(account.Extra, OpenAICodexTicketHarvestProxyIDsExtraKey)
+	account.Extra = StripRetiredAccountExtra(account.Extra)
 
 	billingSettingsAppliedAtomically := false
 	updater := s.accountBillingRepo
@@ -1002,8 +996,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
-	updates = MergeOpenAICodexTicketExtra(updates, nil)
-	delete(updates, OpenAICodexTicketHarvestProxyIDsExtraKey)
+	updates = StripRetiredAccountExtra(updates)
 	updates = sanitizedCodexFingerprintExtraUpdates(updates)
 	updates = stripOpenAIAutoResetCreditManagedExtra(updates, true)
 	delete(updates, UpstreamBillingProbeEnabledExtraKey)
@@ -1025,20 +1018,6 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 		if _, limited := upstreamBillingRateLimitValue(updates); limited {
 			updates[UpstreamBillingProbeEnabledExtraKey] = true
 		}
-	}
-	if hasOpenAICodexTicketAccountPolicyKeys(updates) {
-		account, err := s.accountRepo.GetByID(ctx, id)
-		if err != nil {
-			return err
-		}
-		if account.Platform != PlatformOpenAI {
-			return invalidOpenAICodexTicketExtra(OpenAICodexTicketEnabledExtraKey, "is only valid for OpenAI accounts")
-		}
-		normalized, err := normalizeOpenAICodexTicketAccountExtra(account.Platform, updates, false)
-		if err != nil {
-			return err
-		}
-		updates = normalized
 	}
 	if _, exists := updates[openAILongContextBillingEnabledKey]; exists {
 		account, err := s.accountRepo.GetByID(ctx, id)
@@ -1072,8 +1051,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	}
 
 	// Managed probe/session state may only enter through dedicated typed endpoints.
-	input.Extra = MergeOpenAICodexTicketExtra(input.Extra, nil)
-	delete(input.Extra, OpenAICodexTicketHarvestProxyIDsExtraKey)
+	input.Extra = StripRetiredAccountExtra(input.Extra)
 	input.Extra = sanitizedCodexFingerprintExtraUpdates(input.Extra)
 	input.Extra = stripOpenAIAutoResetCreditManagedExtra(input.Extra, true)
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
@@ -1092,15 +1070,6 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		enabled := true
 		input.ProbeEnabled = &enabled
 	}
-	updatesCodexTicketPolicy := hasOpenAICodexTicketAccountPolicyKeys(input.Extra)
-	if updatesCodexTicketPolicy {
-		normalized, err := normalizeOpenAICodexTicketAccountExtra(PlatformOpenAI, input.Extra, false)
-		if err != nil {
-			return nil, err
-		}
-		input.Extra = normalized
-	}
-
 	if len(input.AccountIDs) == 0 && input.Filters != nil {
 		accountIDs, err := s.resolveBulkUpdateTargetIDs(ctx, input.Filters)
 		if err != nil {
@@ -1135,7 +1104,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 预取所有目标账号，供凭据守卫/代理守卫/混合渠道检查共用，避免多次 DB 查询。
 	var cachedTargets []*Account
-	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || updatesCodexTicketPolicy || updatesUpstreamBillingRateLimit {
+	if len(input.Credentials) > 0 || input.ProxyID != nil || needMixedChannelCheck || openAISettings.any() || input.ProbeEnabled != nil || input.RateMultiplier != nil || updatesUpstreamBillingRateLimit {
 		loaded, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
 		if err != nil {
 			return nil, err
@@ -1146,17 +1115,6 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	for _, account := range cachedTargets {
 		if account != nil {
 			targetsByID[account.ID] = account
-		}
-	}
-	if updatesCodexTicketPolicy {
-		for _, accountID := range input.AccountIDs {
-			account, ok := targetsByID[accountID]
-			if !ok {
-				return nil, ErrAccountNotFound
-			}
-			if account.Platform != PlatformOpenAI {
-				return nil, invalidOpenAICodexTicketExtra(OpenAICodexTicketEnabledExtraKey, "is only valid for OpenAI accounts")
-			}
 		}
 	}
 	if openAISettings.any() {
@@ -1262,7 +1220,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	if err := NormalizeHeaderOverrideCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
-	if err := NormalizeOpenCodeGoProtocolRulesCredentials(input.Credentials); err != nil {
+	if err := NormalizeProtocolRulesCredentials(input.Credentials); err != nil {
 		return nil, err
 	}
 	// Bulk may mix platforms; always drop ephemeral SSO/password keys (cookie

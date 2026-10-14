@@ -71,6 +71,7 @@ type AdminService interface {
 	ReplaceUserGroup(ctx context.Context, userID, oldGroupID, newGroupID int64) (*ReplaceUserGroupResult, error)
 
 	// Account management
+	ListAccountPlatformCounts(ctx context.Context) ([]AccountPlatformCount, error)
 	ListAccounts(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode string, sortBy, sortOrder string) ([]Account, int64, error)
 	// ListAccountsForSchedulerScoreFilter 返回符合过滤条件的全部账号（不分页），
 	// 作为账号列表页计算 OpenAI 调度分数的过滤范围池。
@@ -235,6 +236,7 @@ type AdminBoundAuthIdentityChannel struct {
 type CreateGroupInput struct {
 	Name                      string
 	Description               string
+	I18n                      GroupI18n // 名称与描述的界面语言译文
 	Platform                  string
 	RateMultiplier            float64
 	IsExclusive               bool
@@ -317,6 +319,7 @@ type CreateGroupInput struct {
 type UpdateGroupInput struct {
 	Name                      string
 	Description               *string
+	I18n                      *GroupI18n // nil 表示不修改；非 nil 整体替换
 	Platform                  string
 	RateMultiplier            *float64 // 使用指针以支持设置为0
 	IsExclusive               *bool

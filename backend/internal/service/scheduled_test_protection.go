@@ -20,6 +20,7 @@ type ScheduledTestProtectionConfig struct {
 	Rules        []ScheduledTestProtectionRule  `json:"rules"`
 	Mode         string                         `json:"mode,omitempty"`
 	Combinations []ScheduledTestCombinationRule `json:"combinations,omitempty"`
+	PassGroupIDs []int64                        `json:"pass_group_ids,omitempty"`
 }
 
 type ScheduledTestProtectionRule struct {
@@ -93,14 +94,17 @@ func (p *ScheduledTestPlan) ProtectionRule(definitionID *int64) *ScheduledTestPr
 
 func validateScheduledTestProtection(plan *ScheduledTestPlan) error {
 	config := &plan.Protection
-	if config.Mode != "" && config.Mode != "per_test" && config.Mode != "combined" {
-		return fmt.Errorf("protection mode must be per_test or combined")
+	if config.Mode != "" && config.Mode != "per_test" && config.Mode != "combined" && config.Mode != "all_pass" {
+		return fmt.Errorf("protection mode must be per_test, combined or all_pass")
 	}
 	if !config.Enabled {
 		return nil
 	}
 	if len(config.Rules) == 0 || len(config.Rules) > 32 {
 		return fmt.Errorf("automatic protection requires between 1 and 32 rules")
+	}
+	if err := validateScheduledTestAllPass(plan); err != nil {
+		return err
 	}
 	selected := make(map[int64]bool, len(plan.TestDefinitionIDs))
 	for _, id := range plan.TestDefinitionIDs {
@@ -196,7 +200,7 @@ func validateProtectionOutputKind(rule *ScheduledTestProtectionRule, kind string
 		return nil
 	}
 	if rule.Recovery != nil && rule.Recovery.Enabled && kind != "statistics" {
-		return fmt.Errorf("cache recovery requires a statistics test")
+		return fmt.Errorf("trial recovery requires a statistics test")
 	}
 	if kind == "model_check" {
 		if (rule.Vote != nil && rule.Vote.Enabled) || rule.ExpectedAnswer != "" {

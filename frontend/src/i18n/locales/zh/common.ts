@@ -220,7 +220,10 @@ export default {
   },
 
   tests: {
+    currentScheduling: '当前调度', schedulingActive: '参与调度', schedulingPaused: '暂停调度', failed: '未通过',
+    expandPreview: '放大查看',
     adminReview: {
+      details: '评审说明',
       roundOverrideHint: '管理员判定优先于本轮普通规则，晋级仍须满足所有必需的自动条件。指定分组会替换全部原分组，下轮重新判定。',
       title: '管理员判定', markPass: '判定通过', markFail: '判定不通过',
       pass: '已判通过', fail: '已判不通过',
@@ -249,6 +252,8 @@ export default {
     statisticsSuccessRate: '成功率', statisticsCacheRate: '缓存率', statisticsFirstToken: '平均首字',
     statisticsRequestSamples: '{success} / {total} 次成功', statisticsTokenSamples: '{cached} / {input} 输入 Token 命中缓存', statisticsFirstTokenSamples: '{count} 次有效计时',
     statisticsWindow: '统计时间', statisticsUpdated: '更新时间',
+    statisticsProbeSuccess: '样本不足，主动探测成功；恢复仍受其他检测条件限制',
+    statisticsProbeFailed: '样本不足，主动探测失败，继续暂停',
     statisticsSourceHint: '根据最近一小时已记录的请求统计。缓存率按输入 Token 加权；首字为有效计时样本的平均值。',
     statisticsRecentRequests: '最近请求', statisticsRecentRequestsHint: '最近 10 次请求，从左到右由旧到新', statisticsRequestSuccess: '成功', statisticsRequestFailure: '失败',
     loadMore: '加载更多',

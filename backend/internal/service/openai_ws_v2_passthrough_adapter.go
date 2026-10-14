@@ -880,10 +880,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	statusCode := 0
 	var handshakeHeaders http.Header
 	for {
-		headers, _, err = s.openAIWSCodexTicketHeadersFactory(account, gjson.GetBytes(firstClientMessage, "model").String())(ctx, headers)
-		if err != nil {
-			return fmt.Errorf("refresh ws ticket headers: %w", err)
-		}
 		headers, err = s.refreshOpenAIAgentIdentityHeaders(ctx, account, headers)
 		if err != nil {
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
@@ -1228,6 +1224,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					RequestID: turn.RequestID,
 					Usage: OpenAIUsage{
 						InputTokens:              turn.Usage.InputTokens,
+						ImageInputTokens:         turn.Usage.ImageInputTokens,
 						OutputTokens:             turn.Usage.OutputTokens,
 						CacheCreationInputTokens: turn.Usage.CacheCreationInputTokens,
 						CacheReadInputTokens:     turn.Usage.CacheReadInputTokens,
@@ -1402,6 +1399,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		RequestID: relayResult.RequestID,
 		Usage: OpenAIUsage{
 			InputTokens:              relayResult.Usage.InputTokens,
+			ImageInputTokens:         relayResult.Usage.ImageInputTokens,
 			OutputTokens:             relayResult.Usage.OutputTokens,
 			CacheCreationInputTokens: relayResult.Usage.CacheCreationInputTokens,
 			CacheReadInputTokens:     relayResult.Usage.CacheReadInputTokens,

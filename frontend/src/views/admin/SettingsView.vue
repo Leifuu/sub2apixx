@@ -304,6 +304,113 @@
             </div>
           </div>
 
+          <!-- Rate Limit Cooldown (429) Settings -->
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.rateLimit429Cooldown.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.rateLimit429Cooldown.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div
+                v-if="rateLimit429CooldownLoading"
+                class="flex items-center gap-2 text-gray-500"
+              >
+                <div
+                  class="h-4 w-4 animate-spin rounded-full border-b-2 border-primary-600"
+                ></div>
+                {{ t("common.loading") }}
+              </div>
+
+              <template v-else>
+                <div class="flex items-center justify-between">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">{{
+                      t("admin.settings.rateLimit429Cooldown.enabled")
+                    }}</label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.rateLimit429Cooldown.enabledHint") }}
+                    </p>
+                  </div>
+                  <Toggle v-model="rateLimit429CooldownForm.enabled" />
+                </div>
+
+                <div
+                  v-if="rateLimit429CooldownForm.enabled"
+                  class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.rateLimit429Cooldown.cooldownSeconds",
+                        )
+                      }}
+                    </label>
+                    <input
+                      v-model.number="rateLimit429CooldownForm.cooldown_seconds"
+                      type="number"
+                      min="1"
+                      max="7200"
+                      class="input w-32"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t(
+                          "admin.settings.rateLimit429Cooldown.cooldownSecondsHint",
+                        )
+                      }}
+                    </p>
+                  </div>
+                </div>
+
+                <div
+                  class="flex justify-end border-t border-gray-100 pt-4 dark:border-dark-700"
+                >
+                  <button
+                    type="button"
+                    @click="saveRateLimit429CooldownSettings"
+                    :disabled="rateLimit429CooldownSaving"
+                    class="btn btn-primary btn-sm"
+                  >
+                    <svg
+                      v-if="rateLimit429CooldownSaving"
+                      class="mr-1 h-4 w-4 animate-spin"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        class="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        stroke-width="4"
+                      ></circle>
+                      <path
+                        class="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    {{
+                      rateLimit429CooldownSaving
+                        ? t("common.saving")
+                        : t("common.save")
+                    }}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+
           <!-- Stream Timeout Settings -->
           <div class="card">
             <div
@@ -3948,7 +4055,7 @@
                       </tr>
                     </thead>
                     <tbody class="space-y-2">
-                      <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'typesafe'] as const)" :key="p" class="align-top">
+                      <tr v-for="p in platformQuotaRows(form.default_platform_quotas)" :key="p" class="align-top">
                         <td class="pr-4 py-1">
                           <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                         </td>
@@ -4283,7 +4390,7 @@
                             </tr>
                           </thead>
                           <tbody>
-                            <tr v-for="p in (['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'typesafe'] as const)" :key="`${authSource.source}-pq-${p}`" class="align-top">
+                            <tr v-for="p in platformQuotaRows(authSourceDefaults[authSource.source].platform_quotas)" :key="`${authSource.source}-pq-${p}`" class="align-top">
                               <td class="pr-4 py-1">
                                 <span class="font-mono text-xs text-gray-700 dark:text-gray-300">{{ p }}</span>
                               </td>
@@ -4430,23 +4537,6 @@
               </h2>
             </div>
             <div class="p-6 space-y-4">
-                <div class="flex items-center justify-between gap-4">
-                  <div class="min-w-0">
-                    <h3 class="text-base font-semibold text-gray-900 dark:text-white">
-                      {{ t("admin.settings.gatewayForwarding.codexTicketEnabled") }}
-                    </h3>
-                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                      {{ t("admin.settings.gatewayForwarding.codexTicketEnabledDesc") }}
-                    </p>
-                  </div>
-                  <Toggle
-                    id="codex-ticket-enabled"
-                    v-model="form.openai_codex_ticket_enabled"
-                  />
-                </div>
-                <p class="text-sm text-gray-500 dark:text-gray-400" data-testid="codex-ticket-account-route-hint">
-                  {{ t("admin.settings.gatewayForwarding.codexTicketAccountRouteHint") }}
-                </p>
                 <div>
                   <h3 class="text-base font-semibold text-gray-900 dark:text-white">
                     {{ t("admin.settings.gatewayForwarding.codexClientRestrictionTitle") }}
@@ -8921,6 +9011,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from "vue";
+import { listPlatformIds } from "@/constants/platformCatalog";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api";
 import {
@@ -9157,8 +9248,16 @@ const opencodeGoUsageForm = reactive({
 const overloadCooldownLoading = ref(true);
 const overloadCooldownSaving = ref(false);
 const overloadCooldownForm = reactive({
-  enabled: false,
+  enabled: true,
   cooldown_minutes: 10,
+});
+
+// Rate Limit Cooldown (429) 状态
+const rateLimit429CooldownLoading = ref(true);
+const rateLimit429CooldownSaving = ref(false);
+const rateLimit429CooldownForm = reactive({
+  enabled: true,
+  cooldown_seconds: 5,
 });
 
 // Panel API Rate Limit 状态
@@ -9696,12 +9795,18 @@ type SettingsForm = Omit<
   payment_recharge_bonus_tiers: RechargeBonusTierDraft[];
   payment_recharge_bonus_mode: RechargeBonusMode;
   payment_recharge_bonus_notice: string;
-  // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
+  // 系统全局平台限额 map；form 内始终归一化为全部平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
   account_scheduling_thresholds: ReturnType<typeof normalizeAccountSchedulingThresholdsMap>;
 };
 
 const schedulingThresholdPlatforms = SCHEDULING_THRESHOLD_PLATFORMS;
+
+// 平台限额表格的行：平台清单顺序中、已在归一化 map 里的平台（清单晚于设置加载时
+// 不渲染尚未归一化的平台，保持模板非空绑定）。
+function platformQuotaRows(map: DefaultPlatformQuotasMap | undefined): string[] {
+  return listPlatformIds().filter((platform) => !!map?.[platform]);
+}
 
 const form = reactive<SettingsForm>({
   registration_enabled: true,
@@ -9961,7 +10066,6 @@ const form = reactive<SettingsForm>({
   // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
-  openai_codex_ticket_enabled: false,
   claude_code_client_version: "",
   // 只读展示：自动同步任务写入的官方最新稳定版，不参与提交（提交载荷按字段显式构造）
   claude_code_client_version_synced: "",
@@ -11625,7 +11729,6 @@ async function saveSettings() {
         form.openai_codex_client_version?.trim() || "",
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
-      openai_codex_ticket_enabled: form.openai_codex_ticket_enabled,
       claude_code_client_version: form.claude_code_client_version?.trim() || "",
       claude_code_version_auto_sync_enabled:
         form.claude_code_version_auto_sync_enabled,
@@ -12184,6 +12287,40 @@ async function savePanelRateLimitSettings() {
     );
   } finally {
     panelRateLimitSaving.value = false;
+  }
+}
+
+// Rate Limit Cooldown (429) 方法
+async function loadRateLimit429CooldownSettings() {
+  rateLimit429CooldownLoading.value = true;
+  try {
+    const settings = await adminAPI.settings.getRateLimit429CooldownSettings();
+    Object.assign(rateLimit429CooldownForm, settings);
+  } catch (_error: unknown) {
+    // Silent fail - settings will use defaults
+  } finally {
+    rateLimit429CooldownLoading.value = false;
+  }
+}
+
+async function saveRateLimit429CooldownSettings() {
+  rateLimit429CooldownSaving.value = true;
+  try {
+    const updated = await adminAPI.settings.updateRateLimit429CooldownSettings({
+      enabled: rateLimit429CooldownForm.enabled,
+      cooldown_seconds: rateLimit429CooldownForm.cooldown_seconds,
+    });
+    Object.assign(rateLimit429CooldownForm, updated);
+    appStore.showSuccess(t("admin.settings.rateLimit429Cooldown.saved"));
+  } catch (error: unknown) {
+    appStore.showError(
+      extractApiErrorMessage(
+        error,
+        t("admin.settings.rateLimit429Cooldown.saveFailed"),
+      ),
+    );
+  } finally {
+    rateLimit429CooldownSaving.value = false;
   }
 }
 
@@ -12834,6 +12971,7 @@ onMounted(() => {
   loadOllamaCloudUsageSettings();
   loadOpenCodeGoUsageSettings();
   loadOverloadCooldownSettings();
+  loadRateLimit429CooldownSettings();
   loadPanelRateLimitSettings();
   loadStreamTimeoutSettings();
   loadRectifierSettings();

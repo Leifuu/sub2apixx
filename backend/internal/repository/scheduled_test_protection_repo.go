@@ -216,7 +216,7 @@ func combineProtectionVerdict(state *protectionState, pass, fail int) (string, b
 		return "pending", state.blocked, state.reason
 	}
 	if state.automated == "pass" {
-		return "pass", false, ""
+		return "pass", false, state.reason
 	}
 	return "pending", state.blocked, state.reason
 }
@@ -243,7 +243,7 @@ func saveProtectionVerdict(ctx context.Context, tx *sql.Tx, state *protectionSta
 	scheduling := state.rule.OutcomeAction(verdict).Scheduling
 	// Combined mode consumes the original check verdicts without executing its
 	// legacy actions. Cache recovery remains an independent bounded safeguard.
-	if config.UsesCombinations() && (state.rule.Recovery == nil || !state.rule.Recovery.Enabled) {
+	if (config.UsesCombinations() || config.UsesAllPass()) && (state.rule.Recovery == nil || !state.rule.Recovery.Enabled) {
 		scheduling = "keep"
 	}
 	switch scheduling {
@@ -363,7 +363,16 @@ func (r *scheduledTestResultRepository) CompleteProtection(ctx context.Context, 
 	if err != nil || !current {
 		return err
 	}
-	// Recovery owns the hold until a fresh, bounded trial has been evaluated.
+	// A new statistics execution can explicitly prove connectivity when usage
+	// samples are missing. It only releases its own hold, under the same locks
+	// and current-result checks as the normal quality decisions.
+	if handled, err := completeStatisticsRecoveryProbe(ctx, tx, state, result); handled || err != nil {
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	// Recovery otherwise owns the hold until a fresh trial has been evaluated.
 	// Ordinary hourly completions must neither release it nor restart its clock.
 	if state.blocked && state.recoveryPhase != "" {
 		_, err := tx.ExecContext(ctx, `UPDATE scheduled_test_protection_states SET completed=TRUE,automated_verdict='fail',verdict='fail' WHERE result_id=$1 AND generation=$2`, result.ID, state.generation)
@@ -374,7 +383,7 @@ func (r *scheduledTestResultRepository) CompleteProtection(ctx context.Context, 
 		if err != nil {
 			return err
 		}
-		if config.UsesCombinations() {
+		if config.UsesCombinations() || config.UsesAllPass() {
 			if err := reconcileProtectionGroups(ctx, tx, state); err != nil {
 				return err
 			}

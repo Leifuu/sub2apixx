@@ -538,7 +538,11 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe' | 'composite'
+/**
+ * 分组平台：具体平台或 composite。具体平台以平台清单（constants/platformCatalog）
+ * 为准，后端新登记的平台是 KnownAccountPlatform 之外的字符串。
+ */
+export type GroupPlatform = AccountPlatform | 'composite'
 
 export type VideoModelPrices = Record<string, Record<string, number>>
 
@@ -560,6 +564,16 @@ export interface ReasoningEffortMapping {
   model?: string
 }
 
+/** 分组名称与描述在某个语言下的译文；字段为空表示沿用分组自身的 name/description。 */
+export interface GroupLocaleText {
+  name?: string
+  description?: string
+}
+
+/** 以语言代码（en、zh…）为键的分组文案译文。 */
+export type GroupI18n = Record<string, GroupLocaleText>
+
+// 用户侧接口返回的 name / description 已由后端按请求语言（Accept-Language）选好
 export interface Group {
   id: number
   name: string
@@ -624,6 +638,8 @@ export interface Group {
 }
 
 export interface AdminGroup extends Group {
+  // 管理端的 name / description 始终是原字段，各语言译文另放在 i18n 里
+  i18n?: GroupI18n
   force_openai_fast: boolean
   free_openai_fast: boolean
   model_pricing: import('@/api/admin/channels').ChannelModelPricing[]
@@ -794,6 +810,7 @@ export interface UpdateApiKeyRequest {
 export interface CreateGroupRequest {
   name: string
   description?: string | null
+  i18n?: GroupI18n
   platform?: GroupPlatform
   rate_multiplier?: number
   is_exclusive?: boolean
@@ -860,6 +877,7 @@ export interface CreateGroupRequest {
 export interface UpdateGroupRequest {
   name?: string
   description?: string | null
+  i18n?: GroupI18n
   platform?: GroupPlatform
   rate_multiplier?: number
   is_exclusive?: boolean
@@ -925,7 +943,13 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe'
+/** 前端内置专属界面（图标、配色、表单等）的平台。 */
+export type KnownAccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' | 'grok' | 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'opencode_go' | 'typesafe' | 'command_code' | 'cline'
+/**
+ * 账号平台：内置平台，或后端平台清单中新登记的平台（任意字符串）。
+ * `string & {}` 保留内置平台的字面量补全。
+ */
+export type AccountPlatform = KnownAccountPlatform | (string & {})
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h'
@@ -1007,6 +1031,7 @@ export interface ProxyQualityCheckResult {
 export interface GeminiCredentials {
   // API Key authentication
   api_key?: string
+  base_url?: string
 
   // OAuth authentication
   access_token?: string
@@ -1031,11 +1056,15 @@ export interface GeminiCredentials {
   model_mapping?: Record<string, string>
 }
 
+export type TempUnschedulableScope = 'account' | 'model'
+
 export interface TempUnschedulableRule {
   error_code: number
   keywords: string[]
   duration_minutes: number
   description: string
+  // 作用范围：account 暂停整个账号，model 只冷却本次请求的模型；缺省时 401 按 account、其余按 model 处理。
+  scope?: TempUnschedulableScope
 }
 
 export interface TempUnschedulableState {
@@ -1043,6 +1072,8 @@ export interface TempUnschedulableState {
   triggered_at_unix: number
   status_code: number
   matched_keyword: string
+  scope?: TempUnschedulableScope
+  model?: string
   rule_index: number
   error_message: string
   trigger_count?: number
@@ -1163,56 +1194,6 @@ export interface OllamaCloudUsageSettings {
   debounce_minutes: number
 }
 
-export type CodexTicketProxySource = 'account' | 'direct' | 'pool'
-
-export interface CodexTurnTicketStatus {
-  model: string
-  length?: number
-  target_length: number
-  ready: boolean
-  remaining_seconds: number
-  cookie_ready?: boolean
-  cookie_remaining_seconds?: number
-  blocked: boolean
-  expires_at?: string
-  attempts?: number
-  successes?: number
-  failures?: number
-  inject_misses?: number
-  last_inject_miss_at?: string | null
-  consecutive_failures?: number
-  in_progress?: boolean
-  last_attempt_at?: string | null
-  next_retry_at?: string | null
-  last_error_code?: string
-  last_error?: string
-  last_http_status?: number
-  last_length?: number
-  last_proxy_index?: number
-  last_proxy_source?: CodexTicketProxySource
-  paused?: boolean
-  plan_known?: boolean
-}
-
-export interface CodexTicketHistoryEvent {
-  id: number
-  at: string
-  model: string
-  outcome: 'success' | 'failure' | 'canceled'
-  error_code: string
-  http_status: number
-  length: number
-  target_length: number
-  proxy_index: number
-  proxy_source?: CodexTicketProxySource
-  duration_ms: number
-}
-
-export interface CodexTicketHistoryResponse {
-  events: CodexTicketHistoryEvent[]
-  limit: number
-}
-
 export type OpenCodeGoUsageStatus = 'ok' | 'unauthorized' | 'failed'
 
 export interface OpenCodeGoUsageWindow {
@@ -1266,16 +1247,7 @@ export interface Account {
   credentials?: Record<string, unknown>
   credentials_status?: Record<string, boolean>
   ollama_cloud_usage?: OllamaCloudUsageState
-  codex_turn_tickets?: CodexTurnTicketStatus[]
   upstream_billing_rate_limited?: boolean
-  /** Resolved gateway and account policy for Codex 292 / 332 tickets. */
-  codex_ticket_config?: {
-    gateway_enabled: boolean
-    account_enabled: boolean
-    enabled: boolean
-    fail_closed: boolean
-    target_length: number
-  }
   opencode_go_usage?: OpenCodeGoUsageState
   // Extra fields including Codex usage, OpenAI compact capability, and model-level rate limits.
   extra?: (CodexUsageSnapshot & OpenAICompactState & {
@@ -1297,8 +1269,6 @@ export interface Account {
     auto_reset_credit_enabled?: boolean
     auto_reset_credit_5h_threshold?: number
     auto_reset_credit_7d_threshold?: number
-    codex_ticket_enabled?: boolean
-    codex_ticket_fail_closed?: boolean
     codex_auto_reset_credit_state?: {
       status?: 'checking' | 'available' | 'resetting' | 'success' | 'no_credit' | 'failed'
       trigger_window?: string
@@ -2569,6 +2539,17 @@ export interface TestType {
   updated_at?: string
 }
 
+export interface TestSchedulePeriod {
+  start: string
+  end: string
+  interval_minutes: number
+}
+
+export interface TestSchedule {
+  timezone: string
+  periods: TestSchedulePeriod[]
+}
+
 export interface TestPlan {
   id: number
   /** Ordered strategy groups; this order is also used by the user result tabs. */
@@ -2589,6 +2570,7 @@ export interface TestPlan {
   /** Optional effort forwarded to the selected model (Codex-style). */
   reasoning_effort?: string | null
   cron_expression?: string
+  schedule?: TestSchedule | null
   enabled: boolean
   max_results?: number
   protection?: TestProtectionConfig
@@ -2640,7 +2622,8 @@ export interface TestProtectionRule {
 }
 export interface TestProtectionConfig {
   enabled: boolean
-  mode?: 'per_test' | 'combined'
+  mode?: 'per_test' | 'combined' | 'all_pass'
+  pass_group_ids?: number[]
   rules: TestProtectionRule[]
   combinations?: TestCombinationRule[]
 }
@@ -2694,6 +2677,13 @@ export interface TestOutputStatistics {
   cache_samples?: number
   /** Latest ten outcomes, newest first; older snapshots may omit this field. */
   recent_requests?: TestStatisticsRecentRequest[] | null
+  /** Connectivity evidence kept separate from real usage statistics. */
+  recovery_probe?: {
+    status: 'success' | 'failed'
+    started_at: string
+    finished_at: string
+    latency_ms: number
+  } | null
 }
 
 export interface TestOutputModelCheck {
@@ -2716,6 +2706,8 @@ export interface TestProtectionDecision {
 }
 
 export interface TestResult {
+  /** Current account status and scheduling switch; absent for account-free results. */
+  account_schedulable?: boolean | null
   /** Returned only by administrator result endpoints. */
   account_name?: string
   plan_name?: string
@@ -2773,6 +2765,7 @@ export interface CreateTestPlanRequest {
   model_id: string
   reasoning_effort?: string | null
   cron_expression?: string
+  schedule?: TestSchedule | null
   enabled?: boolean
   max_results?: number
   protection?: TestProtectionConfig

@@ -157,7 +157,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 	// 2) Refresh if needed (pre-expiry skew).
 	expiresAt := account.GetCredentialAsTime("expires_at")
 	needsRefresh := needsOpenAICLITokenRefresh(account, time.Now())
-	if needsRefresh && strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" {
+	if !account.IsOpenAIPersonalAccessToken() && strings.TrimSpace(account.GetOpenAIRefreshToken()) == "" {
 		if expiresAt != nil && !time.Now().Before(*expiresAt) {
 			const reason = "openai access_token expired and refresh_token is missing"
 			// 永久故障：缺失 refresh_token 时账号无法自愈，必须立即从调度池剔除，

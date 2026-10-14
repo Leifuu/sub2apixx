@@ -160,24 +160,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
 	}
 
-	if account.IsOpenCodeGo() {
-		mapped := resolveOpenCodeGoMappedModel(account, body, "")
-		switch openCodeGoNativeProtocol(account, mapped) {
-		case APIProtocolAnthropic:
-			return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "")
-		case APIProtocolResponses:
-			break
-		default:
-			return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
-		}
-	}
-
-	// CN 供应商 anthropic 协议账号：/v1/responses 入站是交叉协议组合
-	// （Responses 客户端 × Anthropic 上游），转成 Anthropic 请求走原生端点。
-	// 不能落到下面的 raw-CC 分支——其 URL 构造会把 anthropic base 当 CC base 用。
-	if account.IsAnthropicProtocol() {
-		return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, reqModel)
-	}
 	if account.IsOpenAIApiKey() {
 		if normalized, changed, normalizeErr := normalizeOpenAIParallelToolCallsWithoutTools(body, responsesLite); normalizeErr != nil {
 			return nil, normalizeErr
@@ -196,8 +178,20 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		originalModel = reqModel
 	}
 
-	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
-		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
+	// 上游协议统一由 resolveUpstreamProtocol 判定（按模型分流时带上游模型目录）。OpenAI API Key 账号只会落到
+	// Responses / Chat Completions，上面的归一化对两条路径都生效。
+	routingModel := upstreamRoutingModel(account, body, "")
+	if account.IsOpenCodeGo() && IsOpenCodeUnsupportedModel(routingModel) {
+		return nil, writeOpenCodeUnsupportedModelError(c, false, routingModel)
+	}
+	switch s.resolveUpstreamProtocolFor(ctx, account, APIProtocolResponses, routingModel) {
+	case APIProtocolAnthropic:
+		// Responses 客户端 × Anthropic 上游：转成 Anthropic 请求走原生端点。不能落到
+		// raw-CC 分支——其 URL 构造会把 anthropic base 当 CC base 用。
+		// 账号映射未命中时以去除首尾空白的请求模型兜底，计费名与上游模型名一致。
+		return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, reqModel)
+	case APIProtocolChatCompletions:
+		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime)
 	}
 	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
 	if account.IsOpenAI() && (account.IsOpenAIApiKey() || account.IsOpenAIOAuthLike()) {
@@ -515,6 +509,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				SkipDefaultInstructions:             true,
 				PreserveToolCallIDs:                 true,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
+				ResponsesLite:                       responsesLite,
 			})
 			ensureCodexOAuthInstructionsField(decoded)
 			markDecodedModified()
@@ -523,6 +518,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				IsCodexCLI:                          isCodexCLI,
 				IsCompact:                           isCompactRequest,
 				OmitPromotedSystemMessagesFromInput: omitPromotedSystemMessages,
+				ResponsesLite:                       responsesLite,
 			})
 		}
 		if codexResult.Error != nil {
@@ -1114,7 +1110,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			respBody = s.redactAgentIdentitySensitiveBody(ctx, account, respBody)
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
-			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
+			invalidEncryptedContentError := upstreamCode == "invalid_encrypted_content" ||
+				(upstreamCode == "thinking_signature_invalid" &&
+					strings.Contains(upstreamMsg, "The encrypted content") &&
+					strings.Contains(upstreamMsg, "could not be verified") &&
+					strings.Contains(upstreamMsg, "could not be decrypted or parsed"))
+			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && invalidEncryptedContentError {
 				decoded, decodeErr := ensureReqBody()
 				if decodeErr != nil {
 					return nil, decodeErr
@@ -1348,14 +1349,15 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
-	if account.IsOpenCodeGo() {
+	if account.routesByModel() {
 		// Model protocol_rules are the authority. Probe Extra must not collapse
 		// Grok/GPT/Muse into Chat Completions.
 		return false
 	}
-	if account.IsCNProvider() {
-		// CN 的显式协议配置优先于异步探针 Extra；adaptive 仅 DeepSeek / Kimi
-		// 有原生 Responses，GLM 回退 Chat Completions。
+	if account.RoutesProtocolByInbound() {
+		// 按入站协议分流的供应商（国产厂商等）：显式协议配置优先于异步探针
+		// Extra；adaptive 仅在供应商有原生 Responses 端点时直转，否则回退
+		// Chat Completions（如 GLM）。
 		switch account.GetAPIProtocol() {
 		case APIProtocolChatCompletions:
 			return true
@@ -1444,9 +1446,6 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// 客户端回带的 x-codex-turn-state 若已知由其他账号铸造（failover 换号），
 	// 剥离后再出站——异账号 blob 与本账号的（指纹收敛后）出站身份自相矛盾。
 	s.guardOpenAICodexTurnStateEcho(c, account, req.Header)
-	if err := s.applyOpenAICodexTicket(ctx, account, extractOpenAICodexTicketModel(body), req.Header); err != nil {
-		return nil, err
-	}
 	if account.UsesOpenAICodexProtocol() {
 		compatMessagesBridge := isOpenAICompatMessagesBridgeContext(c) || isOpenAICompatMessagesBridgeBody(body)
 		// 清除客户端透传的 session 头，后续用隔离后的值重新设置，防止跨用户会话碰撞。
