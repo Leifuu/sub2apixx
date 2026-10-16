@@ -21,6 +21,7 @@ type snapshotResultRepoStub struct {
 	latestRun                string
 	frozenMembers            map[int64]bool
 	forbiddenMembershipReads atomic.Int32
+	collect                  func(context.Context, ScheduledTestStatisticsFilter) (*ScheduledTestStatistics, error)
 }
 
 func (r *snapshotResultRepoStub) ListPlanTargetAccountIDs(context.Context, *ScheduledTestPlan, *int64) ([]int64, error) {
@@ -67,11 +68,29 @@ func (r *snapshotResultRepoStub) BeginRun(ctx context.Context, plan *ScheduledTe
 	return results, nil
 }
 
-func (*snapshotResultRepoStub) CollectStatistics(context.Context, ScheduledTestStatisticsFilter) (*ScheduledTestStatistics, error) {
+func (r *snapshotResultRepoStub) CollectStatistics(ctx context.Context, filter ScheduledTestStatisticsFilter) (*ScheduledTestStatistics, error) {
+	if r.collect != nil {
+		return r.collect(ctx, filter)
+	}
 	return &ScheduledTestStatistics{TotalRequests: 10, SuccessRequests: 10}, nil
 }
 func (r *snapshotResultRepoStub) ListStatisticsAccountIDs(context.Context, int64) ([]int64, error) {
 	return r.targets, nil
+}
+
+type snapshotProtectionResultRepoStub struct {
+	*snapshotResultRepoStub
+	ScheduledTestProtectionRepository
+	completedVerdict string
+}
+
+func (*snapshotProtectionResultRepoStub) BeginProtection(context.Context, *ScheduledTestResult, ScheduledTestProtectionRule) error {
+	return nil
+}
+
+func (r *snapshotProtectionResultRepoStub) CompleteProtection(_ context.Context, _ *ScheduledTestResult, verdict, _ string) error {
+	r.completedVerdict = verdict
+	return nil
 }
 
 func newSnapshotRunner(repo *snapshotResultRepoStub, accounts AccountRepository) *ScheduledTestRunnerService {
@@ -160,6 +179,270 @@ func TestScheduledTestSnapshotIncludesStatisticsAndEverySkippedAccountType(t *te
 	}
 }
 
+func TestScheduledTestSnapshotStopsOnlyTheFailedAccount(t *testing.T) {
+	repo := &snapshotResultRepoStub{
+		retryResultRepoStub: &retryResultRepoStub{updated: make(chan *ScheduledTestResult, 16)},
+		targets:             []int64{12, 13},
+	}
+	var failedCalls, passingCalls atomic.Int32
+	accounts := scheduledTestExecutionAccountRepo{get: func(_ context.Context, id int64) (*Account, error) {
+		if id == 12 {
+			failedCalls.Add(1)
+			return nil, errors.New("upstream unavailable")
+		}
+		passingCalls.Add(1)
+		return &Account{ID: id, Extra: map[string]any{"synthetic_ui_test": true}}, nil
+	}}
+	runner := newSnapshotRunner(repo, accounts)
+	plan := scheduledTestExecutionPlan()
+	plan.AccountID, plan.GroupID, plan.TargetMode = nil, scheduledTestPtrInt64(8), "all_accounts"
+	runner.RunPlanNow(context.Background(), plan)
+	close(repo.updated)
+
+	finals := make(map[[2]int64]*ScheduledTestResult)
+	for result := range repo.updated {
+		if result.Status != "running" {
+			finals[[2]int64{*result.AccountID, *result.TestDefinitionID}] = result
+		}
+	}
+	require.Len(t, finals, 4, "all snapshot rows need a terminal result")
+	require.Equal(t, "failed", finals[[2]int64{12, 1}].Status)
+	require.Equal(t, "failed", finals[[2]int64{12, 2}].Status)
+	require.Contains(t, finals[[2]int64{12, 2}].ErrorMessage, "前一项检测未满足条件")
+	require.Equal(t, "success", finals[[2]int64{13, 1}].Status)
+	require.Equal(t, "success", finals[[2]int64{13, 2}].Status)
+	require.EqualValues(t, 1, failedCalls.Load(), "a missing account must not be retried")
+	require.EqualValues(t, 2, passingCalls.Load(), "another account still runs both checks")
+}
+
+func TestScheduledTestSnapshotRunsCheapStatisticsFirstAndSkipsFailedAccount(t *testing.T) {
+	repo := &snapshotResultRepoStub{
+		retryResultRepoStub: &retryResultRepoStub{updated: make(chan *ScheduledTestResult, 16)},
+		targets:             []int64{12, 13},
+	}
+	repo.collect = func(_ context.Context, filter ScheduledTestStatisticsFilter) (*ScheduledTestStatistics, error) {
+		if filter.AccountID != nil && *filter.AccountID == 12 {
+			return nil, errors.New("statistics unavailable")
+		}
+		return &ScheduledTestStatistics{TotalRequests: 10, SuccessRequests: 10}, nil
+	}
+	var upstreamCalls, failedAccountCalls atomic.Int32
+	accounts := scheduledTestExecutionAccountRepo{get: func(_ context.Context, id int64) (*Account, error) {
+		upstreamCalls.Add(1)
+		if id == 12 {
+			failedAccountCalls.Add(1)
+		}
+		return &Account{ID: id, Extra: map[string]any{"synthetic_ui_test": true}}, nil
+	}}
+	runner := newSnapshotRunner(repo, accounts)
+	plan := scheduledTestExecutionPlan()
+	plan.AccountID, plan.GroupID, plan.TargetMode = nil, scheduledTestPtrInt64(8), "all_accounts"
+	plan.TestDefinitionIDs = []int64{1, 3} // The costly check was configured first.
+	runner.RunPlanNow(context.Background(), plan)
+	close(repo.updated)
+
+	finals := make(map[[2]int64]*ScheduledTestResult)
+	for result := range repo.updated {
+		if result.Status != "running" {
+			finals[[2]int64{*result.AccountID, *result.TestDefinitionID}] = result
+		}
+	}
+	require.Len(t, finals, 4)
+	require.Equal(t, "failed", finals[[2]int64{12, 3}].Status)
+	require.Equal(t, "failed", finals[[2]int64{12, 1}].Status)
+	require.Equal(t, "检测跳过：前一项检测未满足条件", finals[[2]int64{12, 1}].ErrorMessage)
+	require.Equal(t, "success", finals[[2]int64{13, 3}].Status)
+	require.Equal(t, "success", finals[[2]int64{13, 1}].Status)
+	require.Zero(t, failedAccountCalls.Load(), "the account with failed statistics must not contact upstream")
+	require.EqualValues(t, 1, upstreamCalls.Load())
+}
+
+func TestScheduledTestResultSatisfiesConfiguredCondition(t *testing.T) {
+	plan := scheduledTestExecutionPlan()
+	plan.Enabled = true
+	plan.TestDefinitionID = scheduledTestPtrInt64(1)
+	plan.Protection = ScheduledTestProtectionConfig{
+		Enabled: true, Mode: "all_pass",
+		Rules: []ScheduledTestProtectionRule{{TestDefinitionID: 1, ExpectedAnswer: "21", AnswerMatch: "numeric"}},
+	}
+	wrong, right := 20.0, 21.0
+	result := &ScheduledTestResult{Status: "success", OutputKind: "number", OutputNumeric: &wrong}
+	require.False(t, scheduledTestResultSatisfies(plan, result), "a completed but wrong answer must stop later checks")
+	result.OutputNumeric = &right
+	require.True(t, scheduledTestResultSatisfies(plan, result))
+	result.OutputNumeric = nil
+	require.False(t, scheduledTestResultSatisfies(plan, result), "an inconclusive automatic condition cannot clear the gate")
+
+	result.Status, result.OutputKind = "success", "text"
+	plan.TestDefinitionID = scheduledTestPtrInt64(2) // no rule: display only
+	require.True(t, scheduledTestResultSatisfies(plan, result), "successful display-only checks do not gate the strategy")
+	result.Status = "failed"
+	require.True(t, scheduledTestResultSatisfies(plan, result), "display-only failures do not stop the all-pass queue")
+	plan.TestDefinitionID = scheduledTestPtrInt64(1)
+	require.False(t, scheduledTestResultSatisfies(plan, result), "failed automatic checks still stop later checks")
+}
+
+func TestScheduledTestSnapshotStatisticsGate(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		statistics  *ScheduledTestStatistics
+		collectErr  error
+		wantVerdict string
+		wantCalls   int32
+	}{
+		{name: "no data", statistics: &ScheduledTestStatistics{}, wantVerdict: "pending", wantCalls: 2},
+		{name: "insufficient samples", statistics: &ScheduledTestStatistics{TotalRequests: 9, SuccessRate: protectionFloat(.5)}, wantVerdict: "pending", wantCalls: 2},
+		{name: "missing cache and timing data", statistics: &ScheduledTestStatistics{TotalRequests: 10, SuccessRate: protectionFloat(1)}, wantVerdict: "pending", wantCalls: 2},
+		{name: "measured failure despite missing metrics", statistics: &ScheduledTestStatistics{TotalRequests: 10, SuccessRate: protectionFloat(.5)}, wantVerdict: "fail"},
+		{name: "statistics query failed", collectErr: errors.New("statistics unavailable"), wantVerdict: "fail"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &snapshotProtectionResultRepoStub{snapshotResultRepoStub: &snapshotResultRepoStub{
+				retryResultRepoStub: &retryResultRepoStub{updated: make(chan *ScheduledTestResult, 16)},
+				targets:             []int64{12},
+				collect: func(context.Context, ScheduledTestStatisticsFilter) (*ScheduledTestStatistics, error) {
+					return tc.statistics, tc.collectErr
+				},
+			}}
+			var calls atomic.Int32
+			accounts := scheduledTestExecutionAccountRepo{get: func(_ context.Context, id int64) (*Account, error) {
+				calls.Add(1)
+				return &Account{ID: id, Extra: map[string]any{"synthetic_ui_test": true}}, nil
+			}}
+			runner := newSnapshotRunner(repo.snapshotResultRepoStub, accounts)
+			runner.scheduledSvc.resultRepo = repo
+			defer runner.Stop()
+			plan := scheduledTestExecutionPlan()
+			plan.Enabled = true
+			plan.TestDefinitionIDs = []int64{1, 2, 3}
+			plan.Protection = ScheduledTestProtectionConfig{
+				Enabled: true, Mode: "all_pass",
+				Rules: []ScheduledTestProtectionRule{{
+					TestDefinitionID: 3, MinSamples: 10, PauseOnFailure: true,
+					Thresholds: []ScheduledTestThreshold{
+						{Metric: "cache_rate", Operator: "lt", Value: 80},
+						{Metric: "avg_first_token_ms", Operator: "gt", Value: 5000},
+						{Metric: "success_rate", Operator: "lt", Value: 80},
+					},
+				}},
+			}
+			runner.RunPlanNow(context.Background(), plan)
+			close(repo.updated)
+
+			var completed []int64
+			finals := make(map[int64]*ScheduledTestResult)
+			for result := range repo.updated {
+				if result.Status != "running" {
+					completed = append(completed, *result.TestDefinitionID)
+					finals[*result.TestDefinitionID] = result
+				}
+			}
+			require.Equal(t, []int64{3, 1, 2}, completed, "statistics must finish before subsequent checks")
+			require.Equal(t, tc.wantVerdict, repo.completedVerdict, "missing samples must not become a passing quality verdict")
+			require.Equal(t, tc.wantCalls, calls.Load(), "subsequent upstream checks must actually run only when the statistics gate permits them")
+			if tc.collectErr != nil {
+				require.Equal(t, "failed", finals[3].Status)
+			} else {
+				require.Equal(t, "success", finals[3].Status)
+			}
+			for _, id := range []int64{1, 2} {
+				if tc.wantCalls > 0 {
+					require.Equal(t, "success", finals[id].Status)
+					require.Empty(t, finals[id].ErrorMessage)
+				} else {
+					require.Equal(t, "failed", finals[id].Status)
+					require.Equal(t, "检测跳过：前一项检测未满足条件", finals[id].ErrorMessage)
+				}
+			}
+		})
+	}
+}
+
+func TestScheduledTestStatisticsWithoutSamplesContinuesSequence(t *testing.T) {
+	plan := scheduledTestExecutionPlan()
+	plan.Enabled = true
+	plan.TestDefinitionID = scheduledTestPtrInt64(3)
+	plan.Protection = ScheduledTestProtectionConfig{
+		Enabled: true, Mode: "all_pass",
+		Rules: []ScheduledTestProtectionRule{{
+			TestDefinitionID: 3,
+			MinSamples:       10,
+			Thresholds:       []ScheduledTestThreshold{{Metric: "success_rate", Operator: "lt", Value: 80}},
+		}},
+	}
+	result := &ScheduledTestResult{
+		Status: "success", OutputKind: "statistics", OutputStatistics: &ScheduledTestStatistics{},
+	}
+
+	verdict, reason := evaluateScheduledTestProtection(plan.Protection.Rules[0], result)
+	require.Equal(t, "pending", verdict, reason)
+	var progress scheduledTestAccountProgress
+	require.True(t, progress.allowsNext(plan, result), "a successful empty statistics snapshot should continue the account sequence")
+	require.False(t, progress.stopped)
+
+	result.OutputStatistics = &ScheduledTestStatistics{TotalRequests: 9, SuccessRate: protectionFloat(1)}
+	verdict, reason = evaluateScheduledTestProtection(plan.Protection.Rules[0], result)
+	require.Equal(t, "pending", verdict, reason)
+	progress = scheduledTestAccountProgress{}
+	require.True(t, progress.allowsNext(plan, result), "below-minimum samples should not stop later checks")
+
+	result.OutputStatistics = &ScheduledTestStatistics{TotalRequests: 10, SuccessRate: protectionFloat(.5)}
+	verdict, reason = evaluateScheduledTestProtection(plan.Protection.Rules[0], result)
+	require.Equal(t, "fail", verdict, reason)
+	progress = scheduledTestAccountProgress{}
+	require.False(t, progress.allowsNext(plan, result), "a measured threshold violation must still stop later checks")
+
+	result.Status = "failed"
+	progress = scheduledTestAccountProgress{}
+	require.False(t, progress.allowsNext(plan, result), "a failed statistics query must still stop later checks")
+
+	result.Status, result.OutputStatistics = "success", nil
+	progress = scheduledTestAccountProgress{}
+	require.False(t, progress.allowsNext(plan, result), "a missing snapshot is not a completed empty snapshot")
+
+	result.Status, result.OutputStatistics = "running", &ScheduledTestStatistics{}
+	progress = scheduledTestAccountProgress{}
+	require.False(t, progress.allowsNext(plan, result), "unfinished statistics must not clear the gate")
+
+	plan.Protection.Rules[0] = cacheRecoveryRule()
+	plan.Protection.Rules[0].TestDefinitionID = 3
+	result.Status, result.StartedAt = "success", time.Now()
+	result.FinishedAt = result.StartedAt.Add(time.Second)
+	result.OutputStatistics.RecoveryProbe = &ScheduledTestRecoveryProbe{
+		Status: "failed", StartedAt: result.StartedAt, FinishedAt: result.FinishedAt,
+	}
+	progress = scheduledTestAccountProgress{}
+	require.False(t, progress.allowsNext(plan, result), "an observed recovery probe failure must still stop later checks")
+}
+
+func TestScheduledTestCombinedConditionKeepsPossibleOrBranch(t *testing.T) {
+	plan := scheduledTestExecutionPlan()
+	plan.Enabled = true
+	plan.Protection = ScheduledTestProtectionConfig{
+		Enabled: true, Mode: "combined",
+		Rules: []ScheduledTestProtectionRule{
+			{TestDefinitionID: 1, ExpectedAnswer: "yes"},
+			{TestDefinitionID: 2, ExpectedAnswer: "yes"},
+		},
+		Combinations: []ScheduledTestCombinationRule{{
+			Condition: ScheduledTestCombinationCondition{Operator: "any", Conditions: []ScheduledTestCombinationCondition{
+				{Operator: "test", TestDefinitionID: 1, Verdict: "pass"},
+				{Operator: "test", TestDefinitionID: 2, Verdict: "pass"},
+			}},
+		}},
+	}
+	var progress scheduledTestAccountProgress
+	plan.TestDefinitionID = scheduledTestPtrInt64(1)
+	require.True(t, progress.allowsNext(plan, &ScheduledTestResult{Status: "success", ResponseText: "no"}), "the second branch can still pass")
+	plan.TestDefinitionID = scheduledTestPtrInt64(2)
+	require.True(t, progress.allowsNext(plan, &ScheduledTestResult{Status: "success", ResponseText: "yes"}))
+
+	plan.Protection.Combinations[0].Condition.Operator = "all"
+	plan.TestDefinitionID = scheduledTestPtrInt64(1)
+	progress = scheduledTestAccountProgress{}
+	require.False(t, progress.allowsNext(plan, &ScheduledTestResult{Status: "success", ResponseText: "no"}), "an impossible AND branch can stop immediately")
+}
+
 func TestScheduledTestSnapshotRecordsProtectionInitializationFailureForEveryTarget(t *testing.T) {
 	repo := &snapshotResultRepoStub{retryResultRepoStub: &retryResultRepoStub{updated: make(chan *ScheduledTestResult, 20)}, targets: []int64{12}, initErr: errors.New("plan changed")}
 	runner := newSnapshotRunner(repo, nil)
@@ -233,6 +516,58 @@ func TestScheduledTestSnapshotFastAccountAdvancesWhileAnotherWaits(t *testing.T)
 	}
 	require.Len(t, completed, 4)
 	require.EqualValues(t, 1, repo.queries.Load(), "moving an account must not change this round's frozen target list")
+}
+
+func TestScheduledTestSnapshotFastAccountAdvancesPastAnotherAccountsStatistics(t *testing.T) {
+	repo := &snapshotResultRepoStub{retryResultRepoStub: &retryResultRepoStub{updated: make(chan *ScheduledTestResult, 16)}, targets: []int64{12, 13}}
+	releaseSlow := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseSlow) })
+	repo.collect = func(ctx context.Context, filter ScheduledTestStatisticsFilter) (*ScheduledTestStatistics, error) {
+		if filter.AccountID != nil && *filter.AccountID == 12 {
+			select {
+			case <-releaseSlow:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return &ScheduledTestStatistics{TotalRequests: 10, SuccessRequests: 10}, nil
+	}
+	accounts := scheduledTestExecutionAccountRepo{get: func(_ context.Context, id int64) (*Account, error) {
+		return &Account{ID: id, Extra: map[string]any{"synthetic_ui_test": true}}, nil
+	}}
+	runner := newSnapshotRunner(repo, accounts)
+	runner.executionTimeout = time.Minute
+	plan := scheduledTestExecutionPlan()
+	plan.AccountID, plan.GroupID, plan.TargetMode = nil, scheduledTestPtrInt64(8), "all_accounts"
+	plan.TestDefinitionIDs = []int64{1, 3} // Local statistics still run first for each account.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); runner.RunPlanNow(ctx, plan) }()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case result := <-repo.updated:
+			if result.Status == "success" && result.AccountID != nil && *result.AccountID == 13 && *result.TestDefinitionID == 1 {
+				select {
+				case <-done:
+					t.Fatal("the slow account should still be collecting statistics")
+				default:
+				}
+				releaseOnce.Do(func() { close(releaseSlow) })
+				select {
+				case <-done:
+				case <-time.After(3 * time.Second):
+					t.Fatal("the slow account did not finish after statistics were released")
+				}
+				return
+			}
+		case <-deadline.C:
+			t.Fatal("the fast account waited for another account's statistics")
+		}
+	}
 }
 
 // Membership changes can happen as soon as a first result is reconciled. The

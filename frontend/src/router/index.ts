@@ -149,6 +149,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/qqbot/bind',
+    name: 'QQBotBind',
+    component: () => import('@/views/auth/QQBotBindView.vue'),
+    meta: { requiresAuth: false, title: 'Confirm QQ Binding', titleKey: 'qqbot.emailBindTitle' }
+  },
+  {
+    path: '/qqbot/transfer',
+    name: 'QQBotTransfer',
+    component: () => import('@/views/auth/QQBotTransferView.vue'),
+    meta: { requiresAuth: false, title: 'Confirm balance transfer', titleKey: 'qqbot.transferConfirmTitle' }
+  },
+  {
     path: '/reset-password',
     name: 'ResetPassword',
     component: () => import('@/views/auth/ResetPasswordView.vue'),
@@ -550,6 +562,49 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/qqbot',
+    redirect: '/admin/qqbot/config'
+  },
+  {
+    path: '/admin/qqbot/config',
+    name: 'AdminQQBot',
+    component: () => import('@/views/admin/QQBotView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'QQ Bot Settings', titleKey: 'qqbot.basicConfig', descriptionKey: 'qqbot.description' }
+  },
+  {
+    path: '/admin/qqbot/bindings',
+    name: 'AdminQQBotBindings',
+    component: () => import('@/views/admin/QQBotBindingsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'QQ Bindings', titleKey: 'qqbot.bindingsTitle' }
+  },
+  {
+    path: '/admin/qqbot/runtime',
+    name: 'AdminQQBotRuntime',
+    redirect: '/admin/qqbot/records'
+  },
+  {
+    path: '/admin/qqbot/records',
+    name: 'AdminQQBotRecords',
+    component: () => import('@/views/admin/QQBotRecordsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'QQ Activity Records', titleKey: 'qqbot.recordsTitle' }
+  },
+  {
+    path: '/admin/qqbot/activities',
+    name: 'AdminQQBotActivities',
+    component: () => import('@/views/admin/QQBotActivitiesView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true, title: 'QQ Activity Settings', titleKey: 'qqbot.activitiesTitle', descriptionKey: 'qqbot.activitiesHelp' }
+  },
+  {
+    path: '/admin/qqbot/checkin',
+    name: 'AdminQQBotCheckin',
+    redirect: { path: '/admin/qqbot/activities', query: { tab: 'checkin' } }
+  },
+  {
+    path: '/admin/qqbot/lottery',
+    name: 'AdminQQBotLottery',
+    redirect: { path: '/admin/qqbot/activities', query: { tab: 'lottery' } }
+  },
+  {
     path: '/admin/announcements',
     name: 'AdminAnnouncements',
     component: () => import('@/views/admin/AnnouncementsView.vue'),
@@ -645,6 +700,18 @@ const routes: RouteRecordRaw[] = [
       title: 'Usage Records',
       titleKey: 'admin.usage.title',
       descriptionKey: 'admin.usage.description'
+    }
+  },
+  {
+    path: '/admin/call-errors',
+    name: 'AdminCallErrors',
+    component: () => import('@/views/admin/CallErrorsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Call Errors',
+      titleKey: 'usage.errors.pageTitle',
+      descriptionKey: 'usage.errors.pageDescription'
     }
   },
   {
@@ -765,6 +832,8 @@ const navigationLoading = useNavigationLoadingState()
 let routePrefetch: ReturnType<typeof useRoutePrefetch> | null = null
 const BACKEND_MODE_ALLOWED_PATHS = ['/login', '/key-usage', '/setup', '/payment/result', '/payment/airwallex', '/legal']
 const BACKEND_MODE_CALLBACK_PATHS = [
+  '/qqbot/bind',
+  '/qqbot/transfer',
   '/auth/callback',
   '/auth/linuxdo/callback',
   '/auth/dingtalk/callback',

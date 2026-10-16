@@ -1,0 +1,260 @@
+import { mount, flushPromises } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createI18n } from 'vue-i18n'
+import zh from '@/i18n/locales/zh'
+import en from '@/i18n/locales/en'
+import { createMemoryHistory, createRouter } from 'vue-router'
+import QQBotCheckinSettings from '@/components/admin/qqbot/QQBotCheckinSettings.vue'
+import QQBotLotterySettings from '@/components/admin/qqbot/QQBotLotterySettings.vue'
+import QQBotInviteSettings from '@/components/admin/qqbot/QQBotInviteSettings.vue'
+import QQBotTransferSettings from '@/components/admin/qqbot/QQBotTransferSettings.vue'
+import QQBotActivitiesView from '../QQBotActivitiesView.vue'
+
+const api = vi.hoisted(() => ({ checkinConfig: vi.fn(), saveCheckin: vi.fn(), inviteConfig: vi.fn(), saveInvite: vi.fn(), transferConfig: vi.fn(), saveTransfer: vi.fn(), lotteryConfig: vi.fn(), saveLottery: vi.fn(), lotteryDraws: vi.fn(), lotteryState: vi.fn() }))
+vi.mock('@/api/qqbot', () => ({ qqbotAPI: api }))
+vi.mock('@/components/layout/AppLayout.vue', () => ({ default: { template: '<main><slot /></main>' } }))
+function i18n(locale: 'zh' | 'en') { return createI18n({ legacy: false, locale, messages: { zh, en } }) }
+
+describe('QQ activity pages with real translations', () => {
+  beforeEach(() => {
+    vi.resetAllMocks()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    api.checkinConfig.mockResolvedValue({ enabled: true, min_amount: 0.1, max_amount: 0.5, min_recharge_total: 0, min_recharge_30d: 0 })
+    api.saveCheckin.mockImplementation(async c => c)
+    api.inviteConfig.mockResolvedValue({ invite_reward: 1, invite_daily_limit: 10, min_recharge_total: 0, min_recharge_30d: 0 })
+    api.saveInvite.mockImplementation(async c => c)
+    api.transferConfig.mockResolvedValue({ transfer_enabled: true, transfer_fee_percent: 1, transfer_min_amount: 0.1, transfer_max_amount: 100 })
+    api.saveTransfer.mockImplementation(async c => c)
+    api.lotteryConfig.mockResolvedValue({ enabled: false, title: 'Lottery', recharge_step: 10, chances_per_step: 1, prizes: [{ name: 'Win', amount: 1, probability_bps: 1000 }, { name: 'Thanks', amount: 0, probability_bps: 9000 }] })
+    api.saveLottery.mockImplementation(async c => c)
+    api.lotteryDraws.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20 })
+    api.lotteryState.mockResolvedValue({ user_id: 7, recharge_total: 35, earned: 3, used: 1, remaining: 2, next_recharge: 5 })
+  })
+  afterEach(() => { try { expect(console.error).not.toHaveBeenCalled() } finally { vi.restoreAllMocks() } })
+  it.each(['zh', 'en'] as const)('%s saves check-in range independently and rejects reversed endpoints', async locale => {
+    const translation = i18n(locale)
+    const w = mount(QQBotCheckinSettings, { global: { plugins: [translation] } })
+    await flushPromises()
+    expect(w.text()).toContain(translation.global.t('qqbot.checkinCommand'))
+    await w.get('[data-testid="min-amount"]').setValue('0.7')
+    await w.get('form').trigger('submit')
+    expect(api.saveCheckin).not.toHaveBeenCalled()
+    expect(w.get('[role="alert"]').text()).toBe(translation.global.t('qqbot.invalidRange'))
+    await w.get('[data-testid="max-amount"]').setValue('0.9')
+    await w.get('[data-testid="min-recharge-total"]').setValue('12.001')
+    await w.get('form').trigger('submit')
+    expect(api.saveCheckin).not.toHaveBeenCalled()
+    expect(w.get('[role="alert"]').text()).toBe(translation.global.t('qqbot.invalidRechargeThreshold'))
+    await w.get('[data-testid="min-recharge-total"]').setValue('12')
+    await w.get('[data-testid="min-recharge-30d"]').setValue('5.25')
+    await w.get('[data-testid="recharge-window-days"]').setValue('7')
+    expect(w.text()).toContain(translation.global.t('qqbot.minimumRecentRecharge', { days: 7 }))
+    await w.get('form').trigger('submit')
+    await flushPromises()
+    expect(api.saveCheckin).toHaveBeenCalledWith({ enabled: true, min_amount: 0.7, max_amount: 0.9, min_recharge_total: 12, min_recharge_30d: 5.25, recharge_window_days: 7 })
+    expect(w.get('[role="status"]').text()).toBe(translation.global.t('common.saved'))
+  })
+  it.each(['zh', 'en'] as const)('%s validates prize probability totals and saves the cumulative rule', async locale => {
+    const translation = i18n(locale)
+    const w = mount(QQBotLotterySettings, { global: { plugins: [translation] } })
+    await flushPromises()
+    expect(w.text()).toContain(translation.global.t('qqbot.lotteryCommand'))
+    expect(w.text()).toContain(translation.global.t('qqbot.historicalRechargeHelp'))
+    const form = w.findAll('form')[0]!
+    const save = () => form.get('button[type="submit"]')
+    await w.get('[data-testid="probability-0"]').setValue('25.25')
+    expect(save().attributes('disabled')).toBeDefined()
+    await form.trigger('submit'); expect(api.saveLottery).not.toHaveBeenCalled()
+    await w.get('[data-testid="probability-1"]').setValue('74.75')
+    await w.get('[data-testid="recharge-step"]').setValue('20')
+    await w.get('[data-testid="chances-per-step"]').setValue('2')
+    expect(save().attributes('disabled')).toBeUndefined()
+    await form.trigger('submit'); await flushPromises()
+    expect(api.saveLottery).toHaveBeenCalledWith(expect.objectContaining({ recharge_step: 20, chances_per_step: 2, prizes: [{ name: 'Win', amount: 1, probability_bps: 2525 }, { name: 'Thanks', amount: 0, probability_bps: 7475 }] }))
+    const lookup = w.findAll('form')[1]!
+    await lookup.get('input').setValue('7'); await lookup.trigger('submit'); await flushPromises()
+    expect(api.lotteryState).toHaveBeenCalledWith(7)
+    expect(w.get('dd').text()).toBe('$35.00')
+    api.lotteryState.mockRejectedValueOnce(new Error('User not found'))
+    await lookup.trigger('submit'); await flushPromises()
+    expect(w.text()).not.toContain('$35.00000000')
+    expect(w.text()).toContain('User not found')
+  })
+  it.each(['zh', 'en'] as const)('%s configures an independent guaranteed pool and displays progress', async locale => {
+    const translation = i18n(locale)
+    const w = mount(QQBotLotterySettings, { global: { plugins: [translation] } })
+    await flushPromises()
+    expect((w.get('[data-testid="guarantee-enabled"]').element as HTMLInputElement).checked).toBe(false)
+    expect(w.find('[data-testid="guarantee-every"]').exists()).toBe(false)
+    await w.get('[data-testid="guarantee-enabled"]').setValue(true)
+    expect(w.text()).toContain(translation.global.t('qqbot.guaranteeHelp'))
+    const form = w.findAll('form')[0]!
+    for (const invalid of ['', '0', '-1', '1.5', '1000001']) {
+      await w.get('[data-testid="guarantee-every"]').setValue(invalid)
+      await form.trigger('submit')
+      expect(api.saveLottery).not.toHaveBeenCalled()
+      expect(w.get('[role="alert"]').text()).toBe(translation.global.t('qqbot.invalidGuaranteeEvery'))
+    }
+    await w.get('[data-testid="guarantee-every"]').setValue('5')
+    await w.get('[data-testid="guarantee-name-0"]').setValue('Guaranteed credit')
+    for (const invalid of ['', '0', '-1', '1001', '0.000000001']) {
+      await w.get('[data-testid="guarantee-amount-0"]').setValue(invalid)
+      await form.trigger('submit')
+      expect(api.saveLottery).not.toHaveBeenCalled()
+      expect(w.get('[role="alert"]').text()).toBe(translation.global.t('qqbot.invalidGuaranteePrizes'))
+    }
+    await w.get('[data-testid="guarantee-amount-0"]').setValue('2.12345678')
+    await w.get('[data-testid="add-guarantee-prize"]').trigger('click')
+    await w.get('[data-testid="guarantee-name-1"]').setValue('Big guarantee')
+    await w.get('[data-testid="guarantee-amount-1"]').setValue('10')
+    await w.get('[data-testid="guarantee-probability-0"]').setValue('75.25')
+    expect(form.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+    await form.trigger('submit')
+    expect(api.saveLottery).not.toHaveBeenCalled()
+    await w.get('[data-testid="guarantee-probability-1"]').setValue('24.75')
+    expect(form.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+    api.saveLottery.mockRejectedValueOnce(new Error('Save failed'))
+    await form.trigger('submit'); await flushPromises()
+    expect(w.get('[role="alert"]').text()).toBe('Save failed')
+    expect((w.get('[data-testid="guarantee-every"]').element as HTMLInputElement).value).toBe('5')
+    await form.trigger('submit'); await flushPromises()
+    expect(api.saveLottery).toHaveBeenLastCalledWith(expect.objectContaining({
+      guarantee_enabled: true, guarantee_every: 5,
+      guarantee_prizes: [{ name: 'Guaranteed credit', amount: 2.12345678, probability_bps: 7525 }, { name: 'Big guarantee', amount: 10, probability_bps: 2475 }],
+      prizes: [{ name: 'Win', amount: 1, probability_bps: 1000 }, { name: 'Thanks', amount: 0, probability_bps: 9000 }]
+    }))
+    api.lotteryState.mockResolvedValueOnce({ user_id: 7, recharge_total: 100, earned: 10, used: 3, remaining: 7, next_recharge: 10, guarantee_every: 5, draws_until_guarantee: 2 })
+    const lookup = w.findAll('form')[1]!
+    await lookup.get('input').setValue('7'); await lookup.trigger('submit'); await flushPromises()
+    expect(w.text()).toContain(translation.global.t('qqbot.guaranteeProgress', { every: 5, count: 2 }))
+    await w.get('[data-testid="guarantee-enabled"]').setValue(false)
+    await form.trigger('submit'); await flushPromises()
+    expect(api.saveLottery).toHaveBeenLastCalledWith(expect.objectContaining({ guarantee_enabled: false, guarantee_every: 5 }))
+    expect(w.find('[data-testid="guarantee-every"]').exists()).toBe(false)
+    expect(w.text()).not.toContain(translation.global.t('qqbot.guaranteeProgress', { every: 5, count: 2 }))
+    await w.get('[data-testid="guarantee-enabled"]').setValue(true)
+    expect((w.get('[data-testid="guarantee-every"]').element as HTMLInputElement).value).toBe('5')
+    w.unmount()
+  })
+  it.each(['zh', 'en'] as const)('%s preserves drafts while switching tabs and saves invitations independently', async locale => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/qqbot/activities', component: QQBotActivitiesView }] })
+    await router.push('/admin/qqbot/activities')
+    const w = mount(QQBotActivitiesView, { global: { plugins: [i18n(locale), router], stubs: { RouterLink: true } } })
+    await flushPromises()
+    expect(w.findAll('[role="tab"]')).toHaveLength(4)
+    expect(api.checkinConfig).toHaveBeenCalledTimes(1)
+    expect(api.lotteryConfig).not.toHaveBeenCalled()
+    expect(api.inviteConfig).not.toHaveBeenCalled()
+    expect(api.transferConfig).not.toHaveBeenCalled()
+    await w.get('[data-testid="min-amount"]').setValue('0.2')
+    await w.get('#qqbot-tab-lottery').trigger('click'); await flushPromises()
+    await w.get('[data-testid="recharge-step"]').setValue('25')
+    await w.get('#qqbot-tab-invite').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query.tab).toBe('invite')
+    await w.get('[data-testid="invite-reward"]').setValue('2.5')
+    await w.get('[data-testid="invite-daily-limit"]').setValue('8')
+    await w.get('[data-testid="invite-min-recharge-total"]').setValue('20')
+    await w.get('[data-testid="invite-min-recharge-30d"]').setValue('10')
+    await w.get('[data-testid="invite-recharge-window-days"]').setValue('60')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveInvite).toHaveBeenCalledWith({ invite_reward: 2.5, invite_daily_limit: 8, min_recharge_total: 20, min_recharge_30d: 10, recharge_window_days: 60 })
+    expect(api.saveCheckin).not.toHaveBeenCalled()
+    expect(api.saveLottery).not.toHaveBeenCalled()
+    await w.get('#qqbot-tab-checkin').trigger('click'); await flushPromises()
+    expect((w.get('[data-testid="min-amount"]').element as HTMLInputElement).value).toBe('0.2')
+    await w.get('#qqbot-tab-checkin').trigger('keydown', { key: 'ArrowRight' }); await flushPromises()
+    expect(w.get('#qqbot-tab-lottery').attributes('aria-selected')).toBe('true')
+    expect((w.get('[data-testid="recharge-step"]').element as HTMLInputElement).value).toBe('25')
+    expect(api.lotteryConfig).toHaveBeenCalledTimes(1)
+    expect(api.checkinConfig).toHaveBeenCalledTimes(1)
+    await w.get('#qqbot-tab-transfer').trigger('click'); await flushPromises()
+    expect(router.currentRoute.value.query.tab).toBe('transfer')
+    await w.get('[data-testid="transfer-fee-percent"]').setValue('2.5')
+    await w.get('#qqbot-tab-checkin').trigger('click'); await flushPromises()
+    await w.get('#qqbot-tab-transfer').trigger('click'); await flushPromises()
+    expect((w.get('[data-testid="transfer-fee-percent"]').element as HTMLInputElement).value).toBe('2.5')
+    expect(api.transferConfig).toHaveBeenCalledTimes(1)
+    expect(api.saveTransfer).not.toHaveBeenCalled()
+    w.unmount()
+  })
+  it.each(['zh', 'en'] as const)('%s validates transfer limits and saves transfer settings independently', async locale => {
+    const translation = i18n(locale)
+    const w = mount(QQBotTransferSettings, { global: { plugins: [translation] } })
+    await flushPromises()
+    expect(w.text()).toContain(translation.global.t('qqbot.transferCommand'))
+    for (const [field, value, message] of [
+      ['transfer-fee-percent', '101', 'invalidTransferFee'],
+      ['transfer-min-amount', '-1', 'invalidTransferMin'],
+      ['transfer-max-amount', '-1', 'invalidTransferMax'],
+      ['transfer-max-amount', '0.05', 'invalidTransferRange']
+    ]) {
+      const input = w.get(`[data-testid="${field}"]`)
+      const previous = (input.element as HTMLInputElement).value
+      await input.setValue(value)
+      await w.get('form').trigger('submit')
+      expect(api.saveTransfer).not.toHaveBeenCalled()
+      expect(w.get('[role="alert"]').text()).toBe(translation.global.t(`qqbot.${message}`))
+      await input.setValue(previous)
+    }
+    await w.get('[data-testid="transfer-fee-percent"]').setValue('2.5')
+    await w.get('[data-testid="transfer-max-amount"]').setValue('0')
+    api.saveTransfer.mockRejectedValueOnce(new Error('Save failed'))
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(w.get('[role="alert"]').text()).toBe('Save failed')
+    expect((w.get('[data-testid="transfer-fee-percent"]').element as HTMLInputElement).value).toBe('2.5')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(api.saveTransfer).toHaveBeenLastCalledWith({ transfer_enabled: true, transfer_fee_percent: 2.5, transfer_min_amount: 0.1, transfer_max_amount: 0 })
+    expect(api.saveCheckin).not.toHaveBeenCalled()
+    expect(api.saveInvite).not.toHaveBeenCalled()
+    expect(api.saveLottery).not.toHaveBeenCalled()
+    expect(w.get('[role="status"]').text()).toBe(translation.global.t('common.saved'))
+    w.unmount()
+  })
+  it.each(['zh', 'en'] as const)('%s validates custom windows and defaults old settings to 30 days', async locale => {
+    for (const kind of ['checkin', 'invite'] as const) {
+      const translation = i18n(locale)
+      const isInvite = kind === 'invite'
+      const save = isInvite ? api.saveInvite : api.saveCheckin
+      const w = mount(isInvite ? QQBotInviteSettings : QQBotCheckinSettings, { global: { plugins: [translation] } })
+      await flushPromises()
+      const input = w.get(isInvite ? '[data-testid="invite-recharge-window-days"]' : '[data-testid="recharge-window-days"]')
+      expect((input.element as HTMLInputElement).value).toBe('30')
+      for (const invalid of ['', '0', '-1', '1.5', '3651']) {
+        await input.setValue(invalid)
+        await w.get('form').trigger('submit')
+        expect(save).not.toHaveBeenCalled()
+        expect(w.get('[role="alert"]').text()).toBe(translation.global.t('qqbot.invalidRechargeWindow'))
+      }
+      for (const days of [1, 3650]) {
+        await input.setValue(String(days))
+        await w.get('form').trigger('submit')
+        await flushPromises()
+        expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ recharge_window_days: days }))
+      }
+      w.unmount()
+    }
+  })
+  it('opens the linked tab and falls back to check-in for unknown tabs', async () => {
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/admin/qqbot/activities', component: QQBotActivitiesView }] })
+    await router.push('/admin/qqbot/activities?tab=invite')
+    const w = mount(QQBotActivitiesView, { global: { plugins: [i18n('zh'), router], stubs: { RouterLink: true } } })
+    await flushPromises()
+    expect(w.get('#qqbot-tab-invite').attributes('aria-selected')).toBe('true')
+    expect(api.checkinConfig).not.toHaveBeenCalled()
+    await router.push('/admin/qqbot/activities?tab=unknown'); await flushPromises()
+    expect(w.get('#qqbot-tab-checkin').attributes('aria-selected')).toBe('true')
+    w.unmount()
+  })
+  it('keeps invitation input after a save failure and allows retrying', async () => {
+    const w = mount(QQBotInviteSettings, { global: { plugins: [i18n('zh')] } })
+    await flushPromises()
+    await w.get('[data-testid="invite-reward"]').setValue('3')
+    api.saveInvite.mockRejectedValueOnce(new Error('Save failed'))
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(w.get('[role="alert"]').text()).toBe('Save failed')
+    expect((w.get('[data-testid="invite-reward"]').element as HTMLInputElement).value).toBe('3')
+    await w.get('form').trigger('submit'); await flushPromises()
+    expect(w.find('[role="alert"]').exists()).toBe(false)
+    expect(w.get('[role="status"]').exists()).toBe(true)
+  })
+})
