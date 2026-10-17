@@ -103,6 +103,18 @@
           </div>
         </div>
 
+        <!-- Recharge Link -->
+        <a
+          v-if="user"
+          href="https://wzyp.cn/shop/RSZU2JGS"
+          target="_blank"
+          rel="noopener noreferrer"
+          :aria-label="t('nav.recharge')"
+          class="hidden items-center rounded-lg bg-primary-600 px-2.5 py-1.5 text-sm font-medium text-white transition-colors hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600 sm:inline-flex"
+        >
+          {{ t('nav.recharge') }}
+        </a>
+
         <!-- User Dropdown -->
         <div v-if="user" class="relative" ref="dropdownRef">
           <button
