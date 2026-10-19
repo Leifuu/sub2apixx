@@ -13,7 +13,13 @@ const upstreamErrorRetryBodyLimit = 64 << 10
 // the caller can write them downstream. Transport errors are deliberately not
 // replayed: without a response we cannot know whether the operation succeeded.
 // The same account, proxy, TLS profile and concurrency reservation are retained.
+// OpenAI Responses SSE capacity failures additionally use checkpoint-based
+// continuation before reaching the existing downstream stream parsers.
 func DoWithConfiguredUpstreamRetry(req *http.Request, send func(*http.Request) (*http.Response, error)) (*http.Response, error) {
+	return doWithConfiguredUpstreamRetry(req, send, true)
+}
+
+func doWithConfiguredUpstreamRetry(req *http.Request, send func(*http.Request) (*http.Response, error), continueStream bool) (*http.Response, error) {
 	if req == nil {
 		return send(req)
 	}
@@ -27,6 +33,9 @@ func DoWithConfiguredUpstreamRetry(req *http.Request, send func(*http.Request) (
 	resp, err := send(req)
 	for {
 		if err != nil || resp == nil || resp.StatusCode < 400 || resp.StatusCode > 599 || resp.StatusCode == http.StatusTooManyRequests {
+			if continueStream && err == nil && resp != nil {
+				resp = withOpenAIStreamContinuation(req, resp, send, state)
+			}
 			return resp, err
 		}
 		policy := state.getPolicy()
