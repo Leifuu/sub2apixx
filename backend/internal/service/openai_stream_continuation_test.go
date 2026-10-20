@@ -272,6 +272,34 @@ func TestOpenAIStreamContinuationBareErrorEOFAndEncryptedHistory(t *testing.T) {
 	require.Contains(t, string(body), "response.completed")
 }
 
+func TestOpenAIStreamContinuationRetriesTransportEOF(t *testing.T) {
+	ctx := upstreamRetryTestContext(t, context.Background(), "503", 2)
+	attempts := 0
+	resp, err := DoWithConfiguredUpstreamRetry(continuationRequest(t, ctx), func(r *http.Request) (*http.Response, error) {
+		attempts++
+		body, readErr := io.ReadAll(r.Body)
+		require.NoError(t, readErr)
+		_ = r.Body.Close()
+		if attempts == 1 {
+			require.Contains(t, string(body), `"stream":true`)
+			return continuationResponse(continuationSSE(continuationOverload)), nil
+		}
+		if attempts == 2 {
+			return nil, fmt.Errorf("Post %s: %w", r.URL, io.EOF)
+		}
+		return continuationResponse(continuationSSE(
+			`{"type":"response.completed","sequence_number":0,"response":{"id":"resp_recovered","status":"completed","output":[]}}`,
+		)), nil
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, 3, attempts)
+	require.Contains(t, string(body), "response.completed")
+	require.NotContains(t, string(body), "response.failed")
+}
+
 func TestOpenAIStreamContinuationPreservesUnmatchedAndBoundedBodies(t *testing.T) {
 	for _, test := range []struct {
 		name, stream string

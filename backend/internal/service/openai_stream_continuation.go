@@ -395,7 +395,7 @@ func (b *openAIContinuationBody) continueAfter(payload []byte) (bool, error) {
 		digest := sha256.Sum256([]byte(fmt.Sprintf("%s/continuation/%d", key, b.attempt+1)))
 		next.Header.Set("Idempotency-Key", fmt.Sprintf("%x", digest))
 	}
-	resp, err := doWithConfiguredUpstreamRetry(next, b.send, false)
+	resp, err := doWithOpenAIContinuationTransportRetry(next, b.send)
 	if err != nil || resp == nil {
 		_ = next.Body.Close()
 		if b.ctx.Err() != nil {
@@ -437,6 +437,41 @@ func (b *openAIContinuationBody) continueAfter(payload []byte) (bool, error) {
 		zap.Int("continuation", b.attempt), zap.Int("checkpoint_items", len(output)), zap.Duration("retry_delay", delay),
 		zap.String("upstream_request_id", resp.Header.Get("x-request-id")))
 	return true, nil
+}
+
+// doWithOpenAIContinuationTransportRetry replays one continuation request when
+// the transport fails before a response is received. The continuation body is
+// checkpoint-derived and replayable, so an EOF here is safe to retry once;
+// ordinary inference requests remain covered by the conservative policy in
+// doWithConfiguredUpstreamRetry and are not replayed on transport errors.
+func doWithOpenAIContinuationTransportRetry(req *http.Request, send func(*http.Request) (*http.Response, error)) (*http.Response, error) {
+	resp, err := doWithConfiguredUpstreamRetry(req, send, false)
+	if !isOpenAIContinuationTransportEOF(req, err) {
+		return resp, err
+	}
+	body, cloneErr := req.GetBody()
+	if cloneErr != nil {
+		return resp, err
+	}
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
+	retryReq := req.Clone(req.Context())
+	retryReq.Body = body
+	retryReq.GetBody = req.GetBody
+	logger.FromContext(req.Context()).Info("gateway.openai_stream_continuation_transport_retry",
+		zap.String("reason", "eof"))
+	return doWithConfiguredUpstreamRetry(retryReq, send, false)
+}
+
+func isOpenAIContinuationTransportEOF(req *http.Request, err error) bool {
+	if req == nil || err == nil || req.GetBody == nil || req.Context().Err() != nil {
+		return false
+	}
+	if HTTPUpstreamProfileFromContext(req.Context()) != HTTPUpstreamProfileOpenAI {
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func (b *openAIContinuationBody) logContinuationBlocked(reason string, payload []byte) {
