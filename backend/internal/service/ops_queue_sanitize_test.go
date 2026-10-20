@@ -199,3 +199,81 @@ func TestSanitizeOpsUpstreamErrorsForQueueIgnoresCallerSuppliedDropCount(t *test
 		t.Fatalf("caller-supplied drop count must be reset: %+v", events[0])
 	}
 }
+
+func TestSanitizeOpsUpstreamErrorsForQueueStripsResponseFailedRequestContext(t *testing.T) {
+	entry := &OpsInsertErrorLogInput{UpstreamErrors: []*OpsUpstreamErrorEvent{
+		{
+			UpstreamStatusCode:   503,
+			ProxyName:            opsProxyNameDirect,
+			UpstreamResponseBody: `{"type":"response.failed","response":{"id":"resp_123","status":"failed","instructions":"private prompt","input":[{"role":"user","content":"private input"}],"output":[],"metadata":{"tenant":"private"},"error":{"type":"server_error","code":"overloaded","message":"Please try again later."}}}`,
+		},
+	}}
+	if err := SanitizeOpsUpstreamErrorsForQueue(entry); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ParseOpsUpstreamErrors(*entry.UpstreamErrorsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("event count = %d, want 1", len(events))
+	}
+	body := events[0].UpstreamResponseBody
+	if strings.Contains(body, "private prompt") || strings.Contains(body, "private input") || strings.Contains(body, "tenant") {
+		t.Fatalf("request context leaked from JSON error payload: %s", body)
+	}
+	if !strings.Contains(body, "overloaded") || !strings.Contains(body, "resp_123") {
+		t.Fatalf("diagnostic fields were removed: %s", body)
+	}
+}
+
+func TestSanitizeOpsUpstreamErrorsForQueueStripsSSEResponseFailedRequestContext(t *testing.T) {
+	entry := &OpsInsertErrorLogInput{UpstreamErrors: []*OpsUpstreamErrorEvent{
+		{
+			UpstreamStatusCode: 503,
+			ProxyName:          opsProxyNameDirect,
+			Detail: `event: response.failed
+data: {"type":"response.failed","response":{"id":"resp_sse","instructions":"private prompt","input":"private input","error":{"code":"overloaded","message":"retry later"}}}
+
+`,
+		},
+	}}
+	if err := SanitizeOpsUpstreamErrorsForQueue(entry); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ParseOpsUpstreamErrors(*entry.UpstreamErrorsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("event count = %d, want 1", len(events))
+	}
+	detail := events[0].Detail
+	if strings.Contains(detail, "private prompt") || strings.Contains(detail, "private input") {
+		t.Fatalf("request context leaked from SSE error payload: %s", detail)
+	}
+	if !strings.Contains(detail, "overloaded") || !strings.Contains(detail, "resp_sse") {
+		t.Fatalf("diagnostic fields were removed from SSE payload: %s", detail)
+	}
+}
+
+func TestSanitizeOpsUpstreamErrorsForQueueRedactsMalformedContextPayload(t *testing.T) {
+	entry := &OpsInsertErrorLogInput{UpstreamErrors: []*OpsUpstreamErrorEvent{
+		{
+			UpstreamStatusCode: 503,
+			ProxyName:          opsProxyNameDirect,
+			Detail: `{"type":"response.failed","instructions":"private prompt with raw newline
+and more text","error":{"code":"overloaded"}}`,
+		},
+	}}
+	if err := SanitizeOpsUpstreamErrorsForQueue(entry); err != nil {
+		t.Fatal(err)
+	}
+	events, err := ParseOpsUpstreamErrors(*entry.UpstreamErrorsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := events[0].Detail; got != `{"payload_redacted":true}` {
+		t.Fatalf("malformed context payload = %q, want redaction marker", got)
+	}
+}

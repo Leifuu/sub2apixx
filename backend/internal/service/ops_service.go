@@ -600,7 +600,7 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		out.UpstreamRequestID = truncateString(strings.TrimSpace(out.UpstreamRequestID), 128)
 		out.UpstreamURL = truncateString(strings.TrimSpace(out.UpstreamURL), urlMaxLen)
 		if body := strings.TrimSpace(out.UpstreamResponseBody); keepBody && body != "" {
-			out.UpstreamResponseBody, _ = sanitizeErrorBodyForStorage(body, OpsErrorLogQueueBodyMaxBytes)
+			out.UpstreamResponseBody, _ = sanitizeUpstreamErrorPayloadForStorage(body, OpsErrorLogQueueBodyMaxBytes)
 		} else {
 			out.UpstreamResponseBody = ""
 		}
@@ -632,7 +632,7 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 		}
 		if keepBody && detail != "" {
 			// Keep upstream detail small while the event waits in the queue.
-			sanitizedDetail, _ := sanitizeErrorBodyForStorage(detail, OpsErrorLogQueueBodyMaxBytes)
+			sanitizedDetail, _ := sanitizeUpstreamErrorPayloadForStorage(detail, OpsErrorLogQueueBodyMaxBytes)
 			out.Detail = sanitizedDetail
 		} else {
 			out.Detail = ""
@@ -1129,4 +1129,128 @@ func sanitizeErrorBodyForStorage(raw string, maxBytes int) (sanitized string, tr
 		return truncateString(raw, maxBytes), true
 	}
 	return raw, false
+}
+
+// sanitizeUpstreamErrorPayloadForStorage removes request-context fields from
+// upstream JSON/SSE error payloads before they enter ops_error_logs. Upstream
+// response.failed events can echo instructions, input, output, and metadata;
+// those fields are not needed for diagnosing an upstream failure and may
+// contain user prompts or tool data.
+func sanitizeUpstreamErrorPayloadForStorage(raw string, maxBytes int) (string, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false
+	}
+
+	if strings.Contains(raw, "data:") {
+		lines := strings.Split(raw, "\n")
+		changed := false
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "data:") {
+				continue
+			}
+			payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+			if payload == "" || payload == "[DONE]" {
+				continue
+			}
+			var decoded any
+			if err := json.Unmarshal([]byte(payload), &decoded); err != nil {
+				continue
+			}
+			decoded = stripUpstreamRequestContext(decoded)
+			encoded, err := json.Marshal(decoded)
+			if err != nil {
+				continue
+			}
+			prefix := strings.TrimSpace(strings.TrimSuffix(trimmed, payload))
+			lines[i] = prefix + string(encoded)
+			changed = true
+		}
+		if changed {
+			result := strings.Join(lines, "\n")
+			if maxBytes > 0 && len(result) > maxBytes {
+				return truncateString(result, maxBytes), true
+			}
+			return result, false
+		}
+	}
+
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err == nil {
+		decoded = stripUpstreamRequestContext(decoded)
+		encoded, marshalErr := json.Marshal(decoded)
+		if marshalErr == nil {
+			return sanitizeErrorBodyForStorage(string(encoded), maxBytes)
+		}
+	}
+	// Some upstream response.failed payloads contain unescaped prompt text and
+	// therefore cannot be parsed as JSON. Never truncate such a payload in place:
+	// the prefix can contain the full instructions/input before the parse error.
+	if containsUpstreamRequestContextField(raw) {
+		return `{"payload_redacted":true}`, true
+	}
+	return sanitizeErrorBodyForStorage(raw, maxBytes)
+}
+
+func stripUpstreamRequestContext(v any) any {
+	switch value := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for key, item := range value {
+			if isUpstreamRequestContextKey(key) {
+				continue
+			}
+			out[key] = stripUpstreamRequestContext(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(value))
+		for _, item := range value {
+			out = append(out, stripUpstreamRequestContext(item))
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+func isUpstreamRequestContextKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "instructions", "input", "messages", "output", "contents", "metadata",
+		"client_metadata", "tool_usage", "tools", "tool_choice", "parallel_tool_calls",
+		"prompt", "prompt_cache_key", "safety_identifier", "previous_response_id",
+		"conversation", "conversation_id", "context", "request_context":
+		return true
+	default:
+		return false
+	}
+}
+
+func containsUpstreamRequestContextField(raw string) bool {
+	lower := strings.ToLower(raw)
+	for _, key := range []string{
+		"instructions", "input", "messages", "output", "contents", "metadata",
+		"client_metadata", "tool_usage", "tools", "tool_choice", "prompt",
+		"prompt_cache_key", "safety_identifier", "previous_response_id",
+		"conversation", "conversation_id", "context", "request_context",
+	} {
+		needle := `"` + key + `"`
+		start := 0
+		for {
+			idx := strings.Index(lower[start:], needle)
+			if idx < 0 {
+				break
+			}
+			idx += start + len(needle)
+			for idx < len(lower) && (lower[idx] == ' ' || lower[idx] == '\t' || lower[idx] == '\r' || lower[idx] == '\n') {
+				idx++
+			}
+			if idx < len(lower) && lower[idx] == ':' {
+				return true
+			}
+			start = idx
+		}
+	}
+	return false
 }
