@@ -251,9 +251,13 @@ func (s *httpUpstreamService) do(req *http.Request, proxyURL string, accountID i
 // profile 非 nil 时使用指定的 Profile 进行 TLS 指纹伪装。
 func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
 	send := func(attempt *http.Request) (*http.Response, error) {
-		return s.doWithTLS(attempt, proxyURL, accountID, accountConcurrency, profile)
+		return s.doWithTLSWithHandshakeRetry(attempt, proxyURL, accountID, accountConcurrency, profile)
 	}
-	resp, err := service.DoWithConfiguredUpstreamRetry(req, send)
+	return service.DoWithConfiguredUpstreamRetry(req, send)
+}
+
+func (s *httpUpstreamService) doWithTLSWithHandshakeRetry(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	resp, err := s.doWithTLS(req, proxyURL, accountID, accountConcurrency, profile)
 	if !isOpenAITLSHandshakeEOF(req, err) {
 		return resp, err
 	}
@@ -263,7 +267,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 		return resp, err
 	}
 	slog.Debug("openai_tls_handshake_retry", "account_id", accountID)
-	return service.DoWithConfiguredUpstreamRetry(retryReq, send)
+	return s.doWithTLS(retryReq, proxyURL, accountID, accountConcurrency, profile)
 }
 
 func isOpenAITLSHandshakeEOF(req *http.Request, err error) bool {
