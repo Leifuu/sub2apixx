@@ -417,10 +417,49 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 	return normalized, nil
 }
 
+func normalizeOpenAIWSModeExtraForCreate(platform, accountType string, extra map[string]any) map[string]any {
+	if platform != PlatformOpenAI {
+		return extra
+	}
+
+	modeKey := ""
+	enabledKey := ""
+	switch accountType {
+	case AccountTypeOAuth, AccountTypeSetupToken:
+		modeKey = "openai_oauth_responses_websockets_v2_mode"
+		enabledKey = "openai_oauth_responses_websockets_v2_enabled"
+	case AccountTypeAPIKey:
+		modeKey = "openai_apikey_responses_websockets_v2_mode"
+		enabledKey = "openai_apikey_responses_websockets_v2_enabled"
+	default:
+		return extra
+	}
+
+	if _, modeProvided := extra[modeKey]; modeProvided {
+		return extra
+	}
+	if _, enabledProvided := extra[enabledKey]; enabledProvided {
+		return extra
+	}
+	if _, enabledProvided := extra["responses_websockets_v2_enabled"]; enabledProvided {
+		return extra
+	}
+	if _, enabledProvided := extra["openai_ws_enabled"]; enabledProvided {
+		return extra
+	}
+	if extra == nil {
+		extra = make(map[string]any, 2)
+	}
+	extra[modeKey] = OpenAIWSIngressModeCtxPool
+	extra[enabledKey] = true
+	return extra
+}
+
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
 	accountExtra = StripRetiredAccountExtra(accountExtra)
+	accountExtra = normalizeOpenAIWSModeExtraForCreate(input.Platform, input.Type, accountExtra)
 	if input.Platform == PlatformTypeSafe && input.Type != AccountTypeAPIKey {
 		return nil, errors.New("typesafe accounts only support apikey credentials")
 	}

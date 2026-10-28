@@ -335,3 +335,22 @@ func configuredOpenAIStreamRetryFailure(ctx context.Context, payload []byte, mes
 	}
 	return &UpstreamFailoverError{StatusCode: status, ResponseBody: append([]byte(nil), payload...), RequestScopedTransient: true, ConfiguredRetry: true}
 }
+
+// openAIStreamReadErrorPayload converts a sanitized upstream stream read
+// failure into the same protocol-shaped payload used by SSE error events.
+// This lets the configured retry policy match failures that occur after the
+// HTTP 200 response has already been received.
+func openAIStreamReadErrorPayload(err error) ([]byte, string) {
+	code, message := classifyOpenAIUpstreamStreamReadError(err)
+	payload, marshalErr := json.Marshal(map[string]any{
+		"type":            "error",
+		"sequence_number": 0,
+		"code":            code,
+		"message":         message,
+		"param":           nil,
+	})
+	if marshalErr != nil {
+		return nil, message
+	}
+	return payload, message
+}

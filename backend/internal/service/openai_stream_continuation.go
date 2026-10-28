@@ -147,6 +147,18 @@ func (b *openAIContinuationBody) Read(p []byte) (int, error) {
 		}
 		frame, err := b.readFrame()
 		if err != nil && len(frame) == 0 {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				// A response can be accepted with HTTP 200 and still terminate
+				// before its terminal SSE event. When the configured policy matches
+				// this sanitized upstream read failure, reuse the same checkpoint
+				// continuation path as an explicit capacity/error event.
+				readFailure, _ := openAIStreamReadErrorPayload(err)
+				if ok, retryErr := b.continueAfter(readFailure); retryErr != nil {
+					return 0, retryErr
+				} else if ok {
+					continue
+				}
+			}
 			if errors.Is(err, io.EOF) && len(b.bareError) > 0 {
 				failure := b.bareError
 				b.bareError = nil
@@ -248,7 +260,7 @@ func (b *openAIContinuationBody) process(frame []byte) error {
 		// 即使在客户端工具暂存期间或错误之后，也不能重放已在上游执行的工具。
 		b.checkpoint.blocked = "server_tool_or_unsupported_output"
 	}
-	if kind == "error" && isOpenAIUpstreamCapacityShedEvent(payload) {
+	if kind == "error" && isOpenAIContinuationRetryableFailure(b.ctx, payload) {
 		if b.canContinue(payload) {
 			// 等 response.failed 的权威 usage；若上游直接 EOF，Read 用此明确错误续接。
 			b.bareError = append([]byte(nil), payload...)
@@ -336,24 +348,60 @@ func continuationErrorBody(payload []byte) []byte {
 	return body
 }
 
+// isOpenAIStreamReadFailure recognizes sanitized transport failures generated
+// after an HTTP 200 SSE response has already been accepted.
+func isOpenAIStreamReadFailure(payload []byte) bool {
+	code := openAIStreamFailedEventErrorCode(payload)
+	if code == "" {
+		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "code").String()))
+	}
+	return code == OpenAIUpstreamHTTP2StreamErrorCode ||
+		code == OpenAIUpstreamStreamReadErrorCode ||
+		code == OpenAIUpstreamStreamTruncatedCode
+}
+
+// isOpenAIContinuationRetryableFailure limits stream-local replay to the
+// established capacity errors, generic OpenAI 503 failures, and read failures
+// that match the administrator policy.
+func isOpenAIContinuationRetryableFailure(ctx context.Context, payload []byte) bool {
+	if isOpenAIUpstreamCapacityShedEvent(payload) {
+		return true
+	}
+	if openAIStreamFailedEventErrorCode(payload) != "server_error" {
+		return configuredOpenAIStreamRetryFailure(ctx, payload, extractOpenAISSEErrorMessage(payload), nil) != nil
+	}
+	return isOpenAITransientProcessingError(
+		http.StatusBadRequest,
+		extractOpenAISSEErrorMessage(payload),
+		payload,
+	)
+}
+
 func (b *openAIContinuationBody) canContinue(payload []byte) bool {
-	if b.checkpoint.blocked != "" || !isOpenAIUpstreamCapacityShedEvent(payload) || b.ctx.Err() != nil {
+	if b.checkpoint.blocked != "" || !isOpenAIContinuationRetryableFailure(b.ctx, payload) || b.ctx.Err() != nil {
 		return false
 	}
-	// 这里只处理容量 503，限流/账单/鉴权继续走原有策略；usage 由续接层累计，不丢弃。
+	// 这里只处理容量 503 和 OpenAI generic server_error 503；限流/账单/鉴权继续走原有策略；usage 由续接层累计，不丢弃。
 	code := openAIStreamFailedEventErrorCode(payload)
 	if code == "" {
 		code = gjson.GetBytes(payload, "code").String()
 	}
-	if code == "slow_down" || openAIStreamFailedEventSemanticStatus(payload, extractOpenAISSEErrorMessage(payload)) != http.StatusServiceUnavailable || IsUpstreamBillingError(http.StatusOK, payload) {
+	if code == "slow_down" || IsUpstreamBillingError(http.StatusOK, payload) {
 		return false
 	}
-	return b.state.getPolicy().matches(http.StatusServiceUnavailable, continuationErrorBody(payload))
+	if !isOpenAIStreamReadFailure(payload) && code != "server_error" && openAIStreamFailedEventSemanticStatus(payload, extractOpenAISSEErrorMessage(payload)) != http.StatusServiceUnavailable {
+		return false
+	}
+	status := http.StatusServiceUnavailable
+	if isOpenAIStreamReadFailure(payload) {
+		status = openAIStreamFailedEventSemanticStatus(payload, extractOpenAISSEErrorMessage(payload))
+	}
+	return b.state.getPolicy().matches(status, continuationErrorBody(payload))
 }
 
 func (b *openAIContinuationBody) continueAfter(payload []byte) (bool, error) {
 	if !b.canContinue(payload) {
-		if isOpenAIUpstreamCapacityShedEvent(payload) {
+		if isOpenAIContinuationRetryableFailure(b.ctx, payload) {
 			b.logContinuationBlocked("capacity_policy_or_client_state", payload)
 		}
 		return false, nil
@@ -373,7 +421,11 @@ func (b *openAIContinuationBody) continueAfter(payload []byte) (bool, error) {
 		b.logContinuationBlocked("retry_wait_limit", payload)
 		return false, nil
 	}
-	if _, claimed := b.state.claim(http.StatusServiceUnavailable, continuationErrorBody(payload)); !claimed {
+	status := http.StatusServiceUnavailable
+	if isOpenAIStreamReadFailure(payload) {
+		status = openAIStreamFailedEventSemanticStatus(payload, extractOpenAISSEErrorMessage(payload))
+	}
+	if _, claimed := b.state.claim(status, continuationErrorBody(payload)); !claimed {
 		b.logContinuationBlocked("retry_budget_or_client_cancelled", payload)
 		return false, nil
 	}

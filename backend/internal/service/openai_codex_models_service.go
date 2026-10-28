@@ -1775,6 +1775,7 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		headerVersion = identity.version
 	}
 	headers.Set("Version", headerVersion)
+	applyOpenAIUpstreamLanguage(headers, credAccount)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

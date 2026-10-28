@@ -311,6 +311,8 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createAccountMock).toHaveBeenCalledTimes(1)
     expect(createAccountMock.mock.calls[0]?.[0]?.rate_limit_429_retry_count).toBeUndefined()
     expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBe(false)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_apikey_responses_websockets_v2_mode).toBe('ctx_pool')
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_apikey_responses_websockets_v2_enabled).toBe(true)
   })
 
   it('does not expose or submit the removed 429 retry setting', async () => {

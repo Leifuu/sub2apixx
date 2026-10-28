@@ -3,7 +3,24 @@ package service
 import (
 	"context"
 	"net/http"
+	"strings"
 )
+
+const openAIUpstreamLanguageTag = "ja-JP"
+
+// applyOpenAIUpstreamLanguage 固定 OpenAI 出站语言，清除客户端或账号覆写产生的重复头。
+func applyOpenAIUpstreamLanguage(headers http.Header, account *Account) {
+	if headers == nil || account == nil || account.Platform != PlatformOpenAI {
+		return
+	}
+	for name := range headers {
+		if strings.EqualFold(name, "Accept-Language") || strings.EqualFold(name, "Oai-Language") {
+			delete(headers, name)
+		}
+	}
+	headers.Set("Accept-Language", openAIUpstreamLanguageTag)
+	headers.Set("Oai-Language", openAIUpstreamLanguageTag)
+}
 
 func setOpenAIChatGPTAccountHeaders(headers http.Header, account *Account) {
 	if headers == nil || account == nil || !account.IsOpenAIOAuthLike() {

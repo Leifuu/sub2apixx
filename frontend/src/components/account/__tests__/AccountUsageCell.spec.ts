@@ -484,6 +484,55 @@ describe('AccountUsageCell', () => {
     expect(wrapper.text()).toContain('25')
   })
 
+  it('OpenAI OAuth 无额度时不自动查询，点击查询后显示窗口并保留刷新入口', async () => {
+    let resolveUsage!: (usage: unknown) => void
+    getUsage.mockReturnValueOnce(new Promise((resolve) => { resolveUsage = resolve }))
+    const wrapper = mount(AccountUsageCell, {
+      props: {
+        account: makeAccount({ id: 2090, platform: 'openai', type: 'oauth', extra: {} })
+      },
+      global: {
+        stubs: {
+          UsageProgressBar: {
+            props: ['label', 'utilization'],
+            template: '<div class="usage-bar">{{ label }}|{{ utilization }}</div>'
+          },
+          OpenAIQuotaResetCell: {
+            template: '<div><slot name="pre-actions" /></div>'
+          }
+        }
+      }
+    })
+
+    await flushPromises()
+    expect(getUsage).not.toHaveBeenCalled()
+    expect(wrapper.findAll('.usage-bar')).toHaveLength(0)
+    const query = wrapper.get('button')
+    expect(query.text()).toBe('admin.accounts.usageWindow.activeQuery')
+
+    await query.trigger('click')
+    expect(getUsage).toHaveBeenCalledTimes(1)
+    expect(getUsage).toHaveBeenCalledWith(2090, 'active', true)
+    expect(query.attributes('disabled')).toBeDefined()
+
+    const usage = {
+      five_hour: { utilization: 19, resets_at: null, remaining_seconds: 0 },
+      seven_day: { utilization: 3, resets_at: null, remaining_seconds: 0 }
+    }
+    resolveUsage(usage)
+    await flushPromises()
+    expect(wrapper.text()).toContain('5h|19')
+    expect(wrapper.text()).toContain('7d|3')
+    expect(wrapper.get('button').attributes('disabled')).toBeUndefined()
+    expect(getUsage).toHaveBeenCalledTimes(1)
+
+    getUsage.mockResolvedValueOnce(usage)
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+    expect(getUsage).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
   it('OpenAI OAuth 快照已过期时手动刷新会请求 usage', async () => {
     getUsage.mockResolvedValue({
       five_hour: {

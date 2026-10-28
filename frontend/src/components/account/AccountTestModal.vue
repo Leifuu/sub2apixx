@@ -189,7 +189,7 @@
           {{
             supportsImageTest
               ? t('admin.accounts.imageTestMode')
-              : t('admin.accounts.testPrompt')
+              : t('admin.accounts.testPrompt', { count: '{count}' })
           }}
         </span>
       </div>
@@ -500,7 +500,7 @@ const handleEvent = (event: {
       addLine(
         supportsImageTest.value
             ? t('admin.accounts.sendingImageRequest')
-            : t('admin.accounts.sendingTestMessage'),
+            : t('admin.accounts.sendingTestMessage', { count: '{count}' }),
         'text-gray-400'
       )
       addLine('', 'text-gray-300')

@@ -30,13 +30,16 @@ func (*configuredRetrySettingRepo) GetValue(_ context.Context, key string) (stri
 }
 
 type configuredRetryHTTPUpstream struct {
-	calls         int
-	streamFailure bool
+	calls          int
+	streamFailure  bool
+	exhaustAccount bool
+	accountIDs     []int64
 }
 
-func (u *configuredRetryHTTPUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+func (u *configuredRetryHTTPUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
 	return service.DoWithConfiguredUpstreamRetry(req, func(r *http.Request) (*http.Response, error) {
 		u.calls++
+		u.accountIDs = append(u.accountIDs, accountID)
 		if r.Body != nil {
 			_, _ = io.Copy(io.Discard, r.Body)
 			_ = r.Body.Close()
@@ -44,12 +47,18 @@ func (u *configuredRetryHTTPUpstream) Do(req *http.Request, _ string, _ int64, _
 		status := 200
 		body := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ok\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"hello\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n"
 		contentType := "text/event-stream"
-		if u.calls <= 2 {
+		if (!u.exhaustAccount && u.calls <= 2) || (u.exhaustAccount && accountID == u.accountIDs[0]) {
 			body = `{"error":{"code":"custom_busy","message":"Our servers are CURRENTLY OVERLOADED. Please try again later."}}`
 			status, contentType = 503, "application/json"
 			if u.streamFailure {
 				status, contentType = 200, "text/event-stream"
 				body = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"failed\"}}\n\nevent: error\ndata: " + `{"type":"error","error":{"code":"custom_busy","message":"Our servers are CURRENTLY OVERLOADED. Please try again later."}}` + "\n\n"
+				// OAuth 在真正生成内容前会发送 metadata，不能将其当成输出提交。
+				body = "event: response.metadata\ndata: {\"type\":\"response.metadata\",\"sequence_number\":0}\n\n" + body
+				if u.exhaustAccount {
+					body = strings.ReplaceAll(body, "custom_busy", "server_error")
+					body += "event: response.failed\ndata: " + `{"type":"response.failed","response":{"id":"failed","status":"failed","error":{"code":"server_error","type":"service_unavailable_error","message":"Our servers are CURRENTLY OVERLOADED. Please try again later."}}}` + "\n\n"
+				}
 			}
 		}
 		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {contentType}}, Body: io.NopCloser(strings.NewReader(body))}, nil
@@ -63,16 +72,30 @@ func (u *configuredRetryHTTPUpstream) DoWithTLS(req *http.Request, proxy string,
 // one successful client response and release every acquired concurrency slot.
 func TestUpstreamErrorRetryResponsesRecoversWithinOneClientRequest(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, streamFailure := range []bool{false, true} {
-		name := "http_error"
-		if streamFailure {
-			name = "sse_error"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, test := range []struct {
+		name                                        string
+		streamFailure, exhaustAccount, largeRequest bool
+	}{
+		{"http_error", false, false, false},
+		{"sse_error", true, false, false},
+		{"exhausted_sse_switches_account", true, true, false},
+		{"large_sse_switches_account", true, true, true},
+		{"exhausted_http_switches_account", false, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			cfg := &config.Config{RunMode: config.RunModeSimple}
 			cfg.Gateway.MaxAccountSwitches = 0
 			repo := &grokCredentialHandlerRepo{accounts: []service.Account{{ID: 801, Name: "test", Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, Status: service.StatusActive, Schedulable: true, Concurrency: 1, Credentials: map[string]any{"api_key": "test"}}}}
-			upstream := &configuredRetryHTTPUpstream{streamFailure: streamFailure}
+			if test.exhaustAccount {
+				cfg.Gateway.MaxAccountSwitches = 1
+				// 禁用账号级额外重试，明确验证管理员预算耗尽后的切号。
+				repo.accounts[0].Credentials["pool_mode"] = true
+				repo.accounts[0].Credentials["pool_mode_retry_count"] = 0
+				other := repo.accounts[0]
+				other.ID = 802
+				repo.accounts = append(repo.accounts, other)
+			}
+			upstream := &configuredRetryHTTPUpstream{streamFailure: test.streamFailure, exhaustAccount: test.exhaustAccount}
 			billingCache := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 			gateway := service.NewOpenAIGatewayService(repo, nil, nil, nil, nil, nil, nil, cfg, nil, nil, service.NewBillingService(cfg, nil), nil, billingCache, upstream, &service.DeferredService{}, nil, nil, nil, nil, nil, nil, nil)
 			defer billingCache.Stop()
@@ -93,15 +116,30 @@ func TestUpstreamErrorRetryResponsesRecoversWithinOneClientRequest(t *testing.T)
 				c.Next()
 			})
 			router.POST("/v1/responses", h.Responses)
-			req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5","input":"hello","stream":true}`))
+			input := "hello"
+			if test.largeRequest {
+				input = strings.Repeat("x", (8<<20)+1)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewBufferString(`{"model":"gpt-5","input":"`+input+`","stream":true}`))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 			router.ServeHTTP(rec, req)
 			require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-			require.Equal(t, 3, upstream.calls)
+			wantCalls := 3
+			if test.exhaustAccount {
+				wantCalls = 4
+				require.Len(t, upstream.accountIDs, wantCalls)
+				require.NotEqual(t, upstream.accountIDs[0], upstream.accountIDs[len(upstream.accountIDs)-1])
+				require.Equal(t, []int64{upstream.accountIDs[0], upstream.accountIDs[0], upstream.accountIDs[0]}, upstream.accountIDs[:3])
+				require.NotContains(t, rec.Body.String(), "response.metadata", "切号必须丢弃失败账号的暂存事件")
+			}
+			require.Equal(t, wantCalls, upstream.calls)
 			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.completed"))
 			require.NotContains(t, rec.Body.String(), "custom_busy")
 			require.NotContains(t, rec.Body.String(), "currently overloaded")
+			require.NotContains(t, rec.Body.String(), "response.failed")
+			require.Empty(t, repo.setErrorIDs)
+			require.Empty(t, repo.setTempIDs)
 			require.Equal(t, int32(acquired), atomic.LoadInt32(&cache.releaseAccountCalled))
 		})
 	}

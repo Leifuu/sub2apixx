@@ -30,7 +30,7 @@ const (
 	openaiQuotaUpstreamTimeout  = 20 * time.Second
 	openaiQuotaCodexBeta        = "codex-1"
 	openaiQuotaCodexOriginator  = "Codex Desktop"
-	openaiQuotaCodexLanguageTag = "zh-TW"
+	openaiQuotaCodexLanguageTag = openAIUpstreamLanguageTag
 	openaiQuotaSecFetchSite     = "none"
 	openaiQuotaSecFetchMode     = "no-cors"
 	openaiQuotaSecFetchDest     = "empty"
@@ -606,6 +606,7 @@ func buildCodexCommonHeaders(accessToken, chatGPTAccountID string, fedRAMP bool)
 		"chatgpt-account-id": chatGPTAccountID,
 		"openai-beta":        openaiQuotaCodexBeta,
 		"oai-language":       openaiQuotaCodexLanguageTag,
+		"accept-language":    openaiQuotaCodexLanguageTag,
 		"originator":         openaiQuotaCodexOriginator,
 		"accept":             "application/json",
 		"sec-fetch-site":     openaiQuotaSecFetchSite,

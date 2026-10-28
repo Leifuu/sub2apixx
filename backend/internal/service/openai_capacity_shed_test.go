@@ -125,6 +125,7 @@ func TestOpenAIStreamErrorFrameDoesNotStartClientOutput(t *testing.T) {
 		{`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded"}}}`, "response.failed", false},
 		{`{"type":"response.created","response":{"id":"resp_1"}}`, "response.created", false},
 		{`{"type":"response.in_progress","response":{"id":"resp_1"}}`, "response.in_progress", false},
+		{`{"type":"response.metadata","metadata":{"trace_id":"trace_1"}}`, "response.metadata", false},
 		{`{"type":"keepalive"}`, "keepalive", false},
 		{`{"type":"unknown_event"}`, "unknown_event", true},
 		{`{"type":"response.output_item.added","item":{"type":"reasoning","summary":[]}}`, "response.output_item.added", false},
@@ -146,6 +147,9 @@ func TestOpenAIStreamMetadataAndKeepaliveBeforeOverloadFailOver(t *testing.T) {
 	stream := strings.Join([]string{
 		"event: response.created",
 		`data: {"type":"response.created","response":{"id":"resp_1","metadata":{"padding":"` + largeMetadata + `"}}}`,
+		"",
+		"event: response.metadata",
+		`data: {"type":"response.metadata","sequence_number":1,"metadata":{"trace_id":"trace_1"}}`,
 		"",
 		"event: response.output_item.added",
 		`data: {"type":"response.output_item.added","item":{"type":"reasoning","summary":[]}}`,

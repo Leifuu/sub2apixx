@@ -296,6 +296,45 @@ func TestAccount_ResolveOpenAIResponsesWebSocketV2Mode(t *testing.T) {
 	})
 }
 
+func TestBuildAccountForCreateDefaultsOpenAIWSModeToCtxPool(t *testing.T) {
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeAPIKey} {
+		account, err := buildAccountForCreate(&CreateAccountInput{
+			Platform: PlatformOpenAI,
+			Type:     accountType,
+		}, nil)
+		require.NoError(t, err)
+		modeKey := "openai_oauth_responses_websockets_v2_mode"
+		enabledKey := "openai_oauth_responses_websockets_v2_enabled"
+		if accountType == AccountTypeAPIKey {
+			modeKey = "openai_apikey_responses_websockets_v2_mode"
+			enabledKey = "openai_apikey_responses_websockets_v2_enabled"
+		}
+		require.Equal(t, OpenAIWSIngressModeCtxPool, account.Extra[modeKey])
+		require.Equal(t, true, account.Extra[enabledKey])
+	}
+}
+
+func TestBuildAccountForCreatePreservesExplicitOpenAIWSMode(t *testing.T) {
+	account, err := buildAccountForCreate(&CreateAccountInput{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+	}, map[string]any{
+		"openai_oauth_responses_websockets_v2_mode":    OpenAIWSIngressModeOff,
+		"openai_oauth_responses_websockets_v2_enabled": false,
+	})
+	require.NoError(t, err)
+	require.Equal(t, OpenAIWSIngressModeOff, account.Extra["openai_oauth_responses_websockets_v2_mode"])
+	require.Equal(t, false, account.Extra["openai_oauth_responses_websockets_v2_enabled"])
+
+	legacy, err := buildAccountForCreate(&CreateAccountInput{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+	}, map[string]any{"responses_websockets_v2_enabled": false})
+	require.NoError(t, err)
+	_, typedModeProvided := legacy.Extra["openai_oauth_responses_websockets_v2_mode"]
+	require.False(t, typedModeProvided)
+}
+
 func TestAccount_OpenAIWSExtraFlags(t *testing.T) {
 	account := &Account{
 		Platform: PlatformOpenAI,

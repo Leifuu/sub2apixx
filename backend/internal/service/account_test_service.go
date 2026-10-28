@@ -22,8 +22,10 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -72,6 +74,8 @@ type AccountTestOptions struct {
 	AudioDataURL string
 }
 
+var accountTestPromptCount atomic.Uint64
+
 type accountTestReasoningEffortContextKey struct{}
 
 func withAccountTestReasoningEffort(ctx context.Context, effort string) context.Context {
@@ -84,6 +88,19 @@ func accountTestReasoningEffort(ctx context.Context) string {
 	}
 	effort, _ := ctx.Value(accountTestReasoningEffortContextKey{}).(string)
 	return strings.TrimSpace(effort)
+}
+
+func nextAccountTestPrompt() string {
+	return fmt.Sprintf("test %d", accountTestPromptCount.Add(1))
+}
+
+func isGeneratedAccountTestPrompt(prompt string) bool {
+	parts := strings.Fields(prompt)
+	if len(parts) != 2 || parts[0] != "test" {
+		return false
+	}
+	_, err := strconv.ParseUint(parts[1], 10, 64)
+	return err == nil
 }
 
 func firstAccountTestOptions(opts []AccountTestOptions) AccountTestOptions {
@@ -131,7 +148,7 @@ const (
 // budget; a configured prompt is a real test and needs a larger budget to
 // avoid treating a model-length truncation as a successful result.
 func accountTestMaxOutputTokens(prompt string, legacy int) int {
-	if strings.TrimSpace(prompt) == "" {
+	if strings.TrimSpace(prompt) == "" || isGeneratedAccountTestPrompt(prompt) {
 		return legacy
 	}
 	return scheduledTestCustomPromptMaxOutputTokens
@@ -166,6 +183,40 @@ func normalizeGrokAccountTestMode(mode string) string {
 	default:
 		return AccountTestModeDefault
 	}
+}
+
+func accountTestUsesGeneratedPrompt(account *Account, modelID, mode string) bool {
+	if account == nil {
+		return false
+	}
+
+	if account.Platform == PlatformGrok {
+		normalizedMode := normalizeGrokAccountTestMode(mode)
+		switch normalizedMode {
+		case AccountTestModeGrokImage, AccountTestModeGrokVideo, AccountTestModeGrokSearch,
+			AccountTestModeGrokTTS, AccountTestModeGrokSTT, AccountTestModeGrokRealtime:
+			return false
+		case AccountTestModeGrokText:
+			return true
+		default:
+			mappedModel := account.GetMappedModel(modelID)
+			return !isGrokImageGenerationModel(modelID) && !isGrokVideoGenerationModel(modelID) &&
+				!isGrokImageGenerationModel(mappedModel) && !isGrokVideoGenerationModel(mappedModel)
+		}
+	}
+
+	if account.IsOpenAI() {
+		if mode == AccountTestModeCompact {
+			return false
+		}
+		return !isOpenAIImageModel(modelID) && !isOpenAIImageModel(account.GetMappedModel(modelID))
+	}
+
+	if account.IsGemini() || account.Platform == PlatformAntigravity {
+		return !isImageGenerationModel(modelID) && !isImageGenerationModel(account.GetMappedModel(modelID))
+	}
+
+	return true
 }
 
 // AccountTestService handles account testing operations
@@ -408,6 +459,10 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.sendErrorAndEnd(c, "Account not found")
 	}
 	bindAccountTestPlatform(c, account)
+	generatedPrompt := nextAccountTestPrompt()
+	if strings.TrimSpace(prompt) == "" && accountTestUsesGeneratedPrompt(account, modelID, mode) {
+		prompt = generatedPrompt
+	}
 
 	// Synthetic UI load-test accounts exercise the real SSE parsing and modal
 	// interactions, but intentionally do not send their placeholder credentials
@@ -1135,7 +1190,7 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 		if mapped := strings.TrimSpace(account.GetMappedModel(testModelID)); mapped != "" {
 			testModelID = mapped
 		}
-		return s.testGrokResponsesConnection(c, ctx, account, authToken, testModelID)
+		return s.testGrokResponsesConnection(c, ctx, account, authToken, testModelID, prompt)
 	}
 
 	// mode == default: infer from model family (legacy UI / API clients).
@@ -1153,7 +1208,7 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	case isGrokVideoGenerationModel(testModelID):
 		return s.testGrokVideoGeneration(c, ctx, account, authToken, testModelID, resolveGrokVideoPrompt(prompt), opts)
 	default:
-		return s.testGrokResponsesConnection(c, ctx, account, authToken, testModelID)
+		return s.testGrokResponsesConnection(c, ctx, account, authToken, testModelID, prompt)
 	}
 }
 
@@ -1339,7 +1394,7 @@ func (s *AccountTestService) observeGrokTestResponse(ctx context.Context, accoun
 	}
 }
 
-func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx context.Context, account *Account, authToken, testModelID string) error {
+func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx context.Context, account *Account, authToken, testModelID, prompt string) error {
 	apiURL, err := buildGrokResponsesURL(account, s.cfg, s.settingService)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Grok base URL: %s", err.Error()))
@@ -1347,7 +1402,7 @@ func (s *AccountTestService) testGrokResponsesConnection(c *gin.Context, ctx con
 
 	s.prepareGrokTestSSE(c)
 
-	payloadBytes, err := buildGrokQuotaProbeBody(testModelID)
+	payloadBytes, err := buildGrokQuotaProbeBody(testModelID, prompt)
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Grok test payload")
 	}
@@ -2940,7 +2995,9 @@ func createOpenAITestPayload(modelID string, isOAuth bool, customPrompt ...strin
 
 	// All accounts require instructions for Responses API
 	payload["instructions"] = openai.DefaultInstructions
-	if len(customPrompt) > 0 && strings.TrimSpace(customPrompt[0]) != "" {
+	if len(customPrompt) > 0 &&
+		strings.TrimSpace(customPrompt[0]) != "" &&
+		!isGeneratedAccountTestPrompt(customPrompt[0]) {
 		// Keep the legacy probe payload unchanged, while allowing configured
 		// tests to return structured output such as HTML/SVG in full.
 		payload["max_output_tokens"] = accountTestMaxOutputTokens(customPrompt[0], 0)

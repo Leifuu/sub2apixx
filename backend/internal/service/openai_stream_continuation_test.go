@@ -22,9 +22,30 @@ import (
 
 const continuationOverload = `{"type":"response.failed","sequence_number":8,"response":{"id":"resp_first","error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded","headers":{"Retry-After":"0"}}}}`
 
+const continuationGenericServerError = `{"type":"response.failed","sequence_number":8,"response":{"id":"resp_first","error":{"code":"server_error","message":"An error occurred while processing your request. Please try again later.","headers":{"Retry-After":"0"}}}}`
+
 func continuationResponse(stream string) *http.Response {
 	return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(stream))}
 }
+
+type continuationUnexpectedEOFBody struct {
+	reader *strings.Reader
+	ended  bool
+}
+
+func (b *continuationUnexpectedEOFBody) Read(p []byte) (int, error) {
+	if b.ended {
+		return 0, io.ErrUnexpectedEOF
+	}
+	n, err := b.reader.Read(p)
+	if err == io.EOF {
+		b.ended = true
+		return 0, io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
+func (b *continuationUnexpectedEOFBody) Close() error { return nil }
 
 func continuationSSE(events ...string) string {
 	var out strings.Builder
@@ -165,6 +186,92 @@ func TestOpenAIStreamContinuationAfterPartialText(t *testing.T) {
 	require.Equal(t, int64(5), terminal.Get("response.usage.output_tokens").Int())
 	var valid any
 	require.NoError(t, json.Unmarshal([]byte(terminal.Raw), &valid))
+}
+
+func TestOpenAIStreamContinuationRetriesGenericServerError(t *testing.T) {
+	ctx := upstreamRetryTestContext(t, context.Background(), "503", 1)
+	attempts := 0
+	resp, err := DoWithConfiguredUpstreamRetry(continuationRequest(t, ctx), func(r *http.Request) (*http.Response, error) {
+		attempts++
+		_ = r.Body.Close()
+		if attempts == 1 {
+			return continuationResponse(continuationSSE(
+				`{"type":"response.created","sequence_number":0,"response":{"id":"resp_first"}}`,
+				`{"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_first"}}`,
+				continuationGenericServerError,
+			)), nil
+		}
+		return continuationResponse(continuationSSE(
+			`{"type":"response.created","sequence_number":0,"response":{"id":"resp_recovered"}}`,
+			`{"type":"response.completed","sequence_number":1,"response":{"id":"resp_recovered","status":"completed","output":[]}}`,
+		)), nil
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts)
+	require.NotContains(t, string(body), "response.failed")
+	require.Contains(t, string(body), "response.completed")
+}
+
+func TestOpenAIStreamContinuationRetriesConfiguredUpstreamResponseEOF(t *testing.T) {
+	ctx := upstreamRetryTestContext(t, context.Background(), "Upstream response", 1)
+	attempts := 0
+	resp, err := DoWithConfiguredUpstreamRetry(continuationRequest(t, ctx), func(r *http.Request) (*http.Response, error) {
+		attempts++
+		body, readErr := io.ReadAll(r.Body)
+		require.NoError(t, readErr)
+		_ = r.Body.Close()
+		if attempts == 1 {
+			return &http.Response{
+				StatusCode: 200,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}},
+				Body: &continuationUnexpectedEOFBody{reader: strings.NewReader(continuationSSE(
+					`{"type":"response.created","sequence_number":0,"response":{"id":"resp_first"}}`,
+					`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_first","type":"message","role":"assistant","content":[]}}`,
+					`{"type":"response.output_text.delta","sequence_number":2,"output_index":0,"item_id":"msg_first","content_index":0,"delta":"部分"}`,
+				))},
+			}, nil
+		}
+		require.Contains(t, string(body), "部分")
+		return continuationResponse(continuationSSE(
+			`{"type":"response.created","sequence_number":0,"response":{"id":"resp_recovered"}}`,
+			`{"type":"response.output_text.delta","sequence_number":1,"output_index":0,"item_id":"msg_second","content_index":0,"delta":"续接"}`,
+			`{"type":"response.completed","sequence_number":2,"response":{"id":"resp_recovered","status":"completed","output":[]}}`,
+		)), nil
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, 2, attempts)
+	require.Contains(t, string(body), "部分")
+	require.Contains(t, string(body), "续接")
+	require.NotContains(t, string(body), "upstream_stream_read_error")
+	require.Equal(t, 1, strings.Count(string(body), "event: response.created"))
+}
+
+func TestOpenAIStreamContinuationLeavesUnmatchedEOF(t *testing.T) {
+	ctx := upstreamRetryTestContext(t, context.Background(), "503", 1)
+	attempts := 0
+	resp, err := DoWithConfiguredUpstreamRetry(continuationRequest(t, ctx), func(r *http.Request) (*http.Response, error) {
+		attempts++
+		_ = r.Body.Close()
+		return &http.Response{
+			StatusCode: 200,
+			Header:     http.Header{"Content-Type": {"text/event-stream"}},
+			Body: &continuationUnexpectedEOFBody{reader: strings.NewReader(continuationSSE(
+				`{"type":"response.created","sequence_number":0,"response":{"id":"resp_first"}}`,
+			))},
+		}, nil
+	})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	require.ErrorIs(t, readErr, io.ErrUnexpectedEOF)
+	require.Equal(t, 1, attempts)
+	require.Contains(t, string(body), "response.created")
 }
 
 func TestOpenAIStreamContinuationDeliversBeforeRetryAndCancelsWait(t *testing.T) {

@@ -670,7 +670,7 @@ const testModeSummary = computed(() => {
     }
   }
   if (supportsImageTest.value) return t('admin.accounts.imageTestMode')
-  return t('admin.accounts.testPrompt')
+  return t('admin.accounts.testPrompt', { count: '{count}' })
 })
 
 const canStartTest = computed(() => {
@@ -970,10 +970,10 @@ const handleEvent = (event: {
                     ? t('admin.accounts.grok.sendingSTTRequest')
                     : grokTestMode.value === 'realtime'
                       ? t('admin.accounts.grok.sendingRealtimeRequest')
-                      : t('admin.accounts.sendingTestMessage')
+                      : t('admin.accounts.sendingTestMessage', { count: '{count}' })
           : supportsImageTest.value
             ? t('admin.accounts.sendingImageRequest')
-            : t('admin.accounts.sendingTestMessage'),
+            : t('admin.accounts.sendingTestMessage', { count: '{count}' }),
         'text-gray-400'
       )
       addLine('', 'text-gray-300')
