@@ -36,6 +36,12 @@ var openAIAPIKeyHealthFailureScript = redis.NewScript(`
 	return {count, 0}
 `)
 
+var openAIAPIKeyHealthResetScript = redis.NewScript(`
+	local key = KEYS[1]
+	redis.call('DEL', key, key .. ':sequence')
+	return 1
+`)
+
 var tempUnschedSetScript = redis.NewScript(`
 	local key = KEYS[1]
 	local new_until = tonumber(ARGV[1])
@@ -140,4 +146,14 @@ func (c *tempUnschedCache) RecordOpenAIAPIKeyHealthFailure(ctx context.Context, 
 		return 0, false, fmt.Errorf("record OpenAI API key health failure: unexpected result types %T/%T", result[0], result[1])
 	}
 	return count, tripped == 1, nil
+}
+
+func (c *tempUnschedCache) ResetOpenAIAPIKeyHealthFailures(ctx context.Context, accountID int64) error {
+	if accountID <= 0 {
+		return nil
+	}
+	if _, err := openAIAPIKeyHealthResetScript.Run(ctx, c.rdb, []string{c.openAIAPIKeyHealthKey(accountID)}).Result(); err != nil {
+		return fmt.Errorf("reset OpenAI API key health failures: %w", err)
+	}
+	return nil
 }

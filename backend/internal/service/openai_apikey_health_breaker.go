@@ -16,7 +16,10 @@ import (
 const openAIAPIKeyHealthBreakerReason = "openai_apikey_health_breaker"
 
 func isOpenAIAPIKeyHealthBreakerAccount(account *Account) bool {
-	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey && account.IsPoolMode()
+	if account == nil || account.Platform != PlatformOpenAI {
+		return false
+	}
+	return account.IsOAuth() || (account.Type == AccountTypeAPIKey && account.IsPoolMode())
 }
 
 func classifyOpenAIAPIKeyHealthFailure(err error) (int, []byte, bool) {
@@ -30,7 +33,6 @@ func classifyOpenAIAPIKeyHealthFailure(err error) (int, []byte, bool) {
 		// attributable to the selected account.
 		if failoverErr.IsCredentialFailure() ||
 			failoverErr.RequestScopedTransient ||
-			failoverErr.RetryableOnSameAccount ||
 			failoverErr.Scope == GatewayFailureScopeRequest ||
 			failoverErr.Scope == GatewayFailureScopeProvider {
 			return failoverErr.StatusCode, failoverErr.ResponseBody, false
@@ -46,6 +48,10 @@ func classifyOpenAIAPIKeyHealthFailure(err error) (int, []byte, bool) {
 		if imageErr.StatusCode == http.StatusTooManyRequests || imageErr.StatusCode >= http.StatusInternalServerError {
 			return imageErr.StatusCode, []byte(strings.TrimSpace(imageErr.Message)), true
 		}
+	}
+	if isOpenAIUpstreamStreamReadFailure(err) {
+		_, message := classifyOpenAIUpstreamStreamReadError(err)
+		return http.StatusBadGateway, []byte(message), true
 	}
 	return 0, nil, false
 }
@@ -124,7 +130,20 @@ func (s *RateLimitService) ObserveOpenAIAPIKeyHealthFailure(ctx context.Context,
 	return true
 }
 
-func (s *RateLimitService) ObserveOpenAIAPIKeyHealthSuccess(context.Context, *Account) {
-	// Health failures are accumulated in a rolling time window. A success does
-	// not reset that window and must not add a Redis round trip to the hot path.
+func (s *RateLimitService) ObserveOpenAIAPIKeyHealthSuccess(ctx context.Context, account *Account) {
+	if s == nil || s.openAIAPIKeyHealth == nil || !isOpenAIAPIKeyHealthBreakerAccount(account) {
+		return
+	}
+	resetter, ok := s.openAIAPIKeyHealth.(OpenAIAPIKeyHealthResetter)
+	if !ok {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	resetCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	if err := resetter.ResetOpenAIAPIKeyHealthFailures(resetCtx, account.ID); err != nil {
+		logger.L().Warn("openai.apikey_health_breaker_reset_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+	}
 }

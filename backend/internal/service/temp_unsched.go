@@ -33,6 +33,12 @@ type OpenAIAPIKeyHealthCache interface {
 	RecordOpenAIAPIKeyHealthFailure(ctx context.Context, accountID int64, windowMinutes, threshold int) (count int64, tripped bool, err error)
 }
 
+// OpenAIAPIKeyHealthResetter is an optional extension used to clear the
+// consecutive-failure counter after a successful request.
+type OpenAIAPIKeyHealthResetter interface {
+	ResetOpenAIAPIKeyHealthFailures(ctx context.Context, accountID int64) error
+}
+
 // TimeoutCounterCache 超时计数器缓存接口
 type TimeoutCounterCache interface {
 	// IncrementTimeoutCount 增加账户的超时计数，返回当前计数值

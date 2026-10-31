@@ -68,6 +68,24 @@ func OpenAIUpstreamStreamReadErrorDetails(err error) (code, message string, ok b
 	return streamErr.clientCode, streamErr.clientMessage, true
 }
 
+// isOpenAIUpstreamStreamReadFailure identifies stream failures that happened
+// after the upstream response started. The Responses path keeps the raw
+// "stream read error" wrapper, while the raw Chat Completions path uses the
+// typed error above; both are account-health signals unless the client closed
+// the request.
+func isOpenAIUpstreamStreamReadFailure(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var streamErr *openAIUpstreamStreamReadError
+	if errors.As(err, &streamErr) && streamErr != nil {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.HasPrefix(lower, "stream read error:") ||
+		strings.HasPrefix(lower, "stream usage incomplete:")
+}
+
 func classifyOpenAIUpstreamStreamReadError(err error) (code, message string) {
 	if err != nil {
 		if errors.Is(err, ErrOpenAIUpstreamStreamTruncated) {

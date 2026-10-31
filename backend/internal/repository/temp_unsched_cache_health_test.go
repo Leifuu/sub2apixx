@@ -48,3 +48,30 @@ func TestOpenAIAPIKeyHealthCacheDropsFailuresOutsideRollingWindow(t *testing.T) 
 	require.EqualValues(t, 1, count)
 	require.False(t, tripped)
 }
+
+func TestOpenAIAPIKeyHealthCacheResetClearsOnlySelectedAccount(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store := NewTempUnschedCache(client)
+	recorder, ok := store.(service.OpenAIAPIKeyHealthCache)
+	require.True(t, ok)
+	resetter, ok := store.(service.OpenAIAPIKeyHealthResetter)
+	require.True(t, ok)
+
+	ctx := context.Background()
+	_, _, err := recorder.RecordOpenAIAPIKeyHealthFailure(ctx, 42, 1, 3)
+	require.NoError(t, err)
+	_, _, err = recorder.RecordOpenAIAPIKeyHealthFailure(ctx, 43, 1, 3)
+	require.NoError(t, err)
+	require.NoError(t, resetter.ResetOpenAIAPIKeyHealthFailures(ctx, 42))
+
+	count, tripped, err := recorder.RecordOpenAIAPIKeyHealthFailure(ctx, 42, 1, 3)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count)
+	require.False(t, tripped)
+	count, tripped, err = recorder.RecordOpenAIAPIKeyHealthFailure(ctx, 43, 1, 3)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, count)
+	require.False(t, tripped)
+}
